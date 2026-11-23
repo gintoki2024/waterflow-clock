@@ -24,7 +24,7 @@
     }
 }
 
-static void applySample(CGImageRef image, ClockView *view) {
+- (void)applyBackgroundImage:(CGImageRef)image toView:(ClockView *)view {
     if (!image || !view.autoColor) return;
     unsigned char samples[9] = {0};
     CGColorSpaceRef space = CGColorSpaceCreateDeviceGray();
@@ -95,7 +95,7 @@ static void applySample(CGImageRef image, ClockView *view) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 self->_busy = NO;
                 if (image) {
-                    if (view.window == window && view.theme == 1) applySample(image, view);
+                    if (view.window == window && view.theme == 1) [self applyBackgroundImage:image toView:view];
                     CGImageRelease(image);
                 } else self->_filter = nil;
             });
@@ -108,7 +108,7 @@ static void applySample(CGImageRef image, ClockView *view) {
         if (!capture) return;
         CGImageRef image = capture(rect, kCGWindowListOptionOnScreenBelowWindow,
             (CGWindowID)window.windowNumber, kCGWindowImageDefault);
-        if (image) { applySample(image, view); CGImageRelease(image); }
+        if (image) { [self applyBackgroundImage:image toView:view]; CGImageRelease(image); }
     }
 }
 @end

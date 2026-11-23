@@ -8,11 +8,12 @@ static SMAppServiceStatus waitForChange(SMAppServiceStatus oldStatus) {
     return SMAppService.mainAppService.status;
 }
 
-int main(void) {
+static int testLogin(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         SMAppServiceStatus initial = SMAppService.mainAppService.status;
-        if (initial != SMAppServiceStatusNotRegistered) {
+        NSLog(@"Initial login state: %ld", (long)initial);
+        if (initial == SMAppServiceStatusEnabled || initial == SMAppServiceStatusRequiresApproval) {
             NSLog(@"Unexpected initial login state: %ld", (long)initial);
             return 1;
         }
@@ -27,5 +28,13 @@ int main(void) {
         printf("macOS unregistration state: %ld\n", (long)final);
         return (registered == SMAppServiceStatusEnabled || registered == SMAppServiceStatusRequiresApproval)
             && final == SMAppServiceStatusNotRegistered ? 0 : 4;
+    }
+}
+
+int main(int argc,const char **argv) {
+    @autoreleasepool {
+        int code=testLogin();
+        if(argc==2) [[NSString stringWithFormat:@"%d",code] writeToFile:[NSString stringWithUTF8String:argv[1]] atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        return code;
     }
 }

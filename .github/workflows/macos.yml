@@ -37,14 +37,23 @@ jobs:
           "$RUNNER_TEMP/resize-test"
       - name: Register and remove an actual login item
         run: |
-          app="$HOME/Applications/WaterflowLoginProbe.app"
+          app="/Applications/WaterflowLoginProbe.app"
+          sudo mkdir "$app"
+          sudo chown "$(id -u):$(id -g)" "$app"
           mkdir -p "$app/Contents/MacOS"
           cp macOS/Info.plist "$app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier app.waterclock.ci.login' "$app/Contents/Info.plist"
           xcrun clang -fobjc-arc -framework Cocoa -framework ServiceManagement -I macOS tests/macos/login.m -o "$app/Contents/MacOS/WaterClock"
           codesign --force --sign - "$app"
           /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
-          "$app/Contents/MacOS/WaterClock"
+          open -W -n --stdout "$RUNNER_TEMP/login.out" --stderr "$RUNNER_TEMP/login.err" "$app" --args "$RUNNER_TEMP/login-result"
+          cat "$RUNNER_TEMP/login.out" "$RUNNER_TEMP/login.err"
+          test "$(cat "$RUNNER_TEMP/login-result")" = 0
+      - name: Verify adaptive ink and check live capture availability
+        if: always()
+        run: |
+          xcrun clang -fobjc-arc -mmacosx-version-min=13.0 -framework Cocoa -framework CoreText -framework CoreGraphics -framework ScreenCaptureKit -I macOS macOS/ClockView.m macOS/InkSampler.m tests/macos/ink.m -o "$RUNNER_TEMP/ink-test"
+          "$RUNNER_TEMP/ink-test"
       - if: matrix.os == 'macos-15'
         uses: actions/upload-artifact@v4
         with:
