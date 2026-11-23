@@ -18,7 +18,7 @@ xcrun --sdk macosx clang -arch arm64 -arch x86_64 -mmacosx-version-min=13.0 \
     "$source_dir"/*.m -o "$executable" \
     -framework Cocoa -framework QuartzCore -framework CoreText \
     -framework CoreGraphics -framework ScreenCaptureKit -framework ServiceManagement
-xcrun lipo -verify_arch arm64 x86_64 "$executable"
+xcrun lipo "$executable" -verify_arch arm64 x86_64
 /usr/bin/codesign --force --sign - --timestamp=none "$app"
 /usr/bin/codesign --verify --strict --all-architectures "$app"
 

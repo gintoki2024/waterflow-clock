@@ -154,7 +154,7 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
         }
         [(i>=6 ? accent : ink) setFill];
         if (self.flow==0 && i==7) {
-            double p = fraction-.095*sin(2*M_PI*fraction);
+            double p = fraction;
             for (int offset=-1;offset<=2;offset++) {
                 double depth = p-offset;
                 CGFloat fading = MAX(0.,1-pow(fabs(depth)/1.44,1.6));

@@ -148,7 +148,7 @@ int main(int argc, const char **argv) {
     @autoreleasepool {
         NSApplication *app = NSApplication.sharedApplication;
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
-        ClockController *controller = [ClockController new];
+        __attribute__((objc_precise_lifetime)) ClockController *controller = [ClockController new];
         app.delegate = controller;
         [app run];
         (void)controller;
