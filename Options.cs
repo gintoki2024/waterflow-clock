@@ -39,6 +39,8 @@ public class Options
     public bool AutoColor = true;
     public ClockTheme Theme = ClockTheme.LiquidGlass;
     public ClockScale Scale = ClockScale.Standard;
+    public int Zoom = 10000;
+    public static int ClampZoom(int value) { return Math.Max(5000, Math.Min(25000, value)); }
     public ClockFlowStyle FlowStyle = ClockFlowStyle.LiquidStream;
     public int X = int.MinValue;
     public int Y = int.MinValue;
@@ -61,6 +63,7 @@ public class Options
                 if (theme >= 0 && theme <= 3) options.Theme = (ClockTheme)theme;
                 int scale = ReadNumber(key, "Scale", (int)ClockScale.Standard);
                 if (scale >= 0 && scale <= 2) options.Scale = (ClockScale)scale;
+                options.Zoom = ClampZoom(ReadNumber(key, "Zoom", 10000));
                 int flow = ReadNumber(key, "FlowStyle", (int)ClockFlowStyle.LiquidStream);
                 if (flow >= 0 && flow <= 3) options.FlowStyle = (ClockFlowStyle)flow;
                 options.X = ReadNumber(key, "X", int.MinValue);
@@ -89,6 +92,7 @@ public class Options
             key.SetValue("AutoColor", AutoColor ? 1 : 0, RegistryValueKind.DWord);
             key.SetValue("Theme", (int)Theme, RegistryValueKind.DWord);
             key.SetValue("Scale", (int)Scale, RegistryValueKind.DWord);
+            key.SetValue("Zoom", ClampZoom(Zoom), RegistryValueKind.DWord);
             key.SetValue("FlowStyle", (int)FlowStyle, RegistryValueKind.DWord);
             key.SetValue("X", X, RegistryValueKind.DWord);
             key.SetValue("Y", Y, RegistryValueKind.DWord);
@@ -167,7 +171,7 @@ public sealed class OptionsDialog : Form
         };
         Label subtitle = new Label
         {
-            Text = "左键拖动桌面时钟调整位置，右键可快速切换主题与流动风格",
+            Text = "拖动时钟可移动位置，拖动右下角手柄可等比缩放。",
             Font = CreateUiFont(8.5f, FontStyle.Regular),
             ForeColor = TextMuted,
             AutoSize = true,
@@ -208,6 +212,11 @@ public sealed class OptionsDialog : Form
         StyleCombo(scaleBox, fieldX, y, fieldW);
         scaleBox.Items.AddRange(new object[] { "紧凑（小）", "标准（中）", "醒目（大）" });
         scaleBox.SelectedIndex = (int)options.Scale;
+        if (options.Zoom != 10000)
+        {
+            scaleBox.Items.Add(string.Format("自定义（预设的 {0:0.#}%）", options.Zoom / 100.0));
+            scaleBox.SelectedIndex = 3;
+        }
 
         y += rowStep;
         Label fontLabel = MakeLabel("数字字体", labelX, y + 4);
@@ -352,7 +361,8 @@ public sealed class OptionsDialog : Form
             TopMost = topMostCheck.Checked,
             AutoColor = autoColorCheck.Checked,
             Theme = (ClockTheme)Math.Max(0, themeBox.SelectedIndex),
-            Scale = (ClockScale)Math.Max(0, scaleBox.SelectedIndex),
+            Scale = scaleBox.SelectedIndex == 3 ? options.Scale : (ClockScale)Math.Max(0, scaleBox.SelectedIndex),
+            Zoom = scaleBox.SelectedIndex == 3 ? options.Zoom : 10000,
             FlowStyle = (ClockFlowStyle)Math.Max(0, flowBox.SelectedIndex)
         };
         try
@@ -374,6 +384,7 @@ public sealed class OptionsDialog : Form
             options.AutoColor = edited.AutoColor;
             options.Theme = edited.Theme;
             options.Scale = edited.Scale;
+            options.Zoom = edited.Zoom;
             options.FlowStyle = edited.FlowStyle;
             DialogResult = DialogResult.OK;
         }

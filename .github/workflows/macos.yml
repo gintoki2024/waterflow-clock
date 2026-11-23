@@ -31,6 +31,10 @@ jobs:
           trap 'kill "$pid" 2>/dev/null || true' EXIT
           sleep 5
           kill -0 "$pid"
+      - name: Drag the resize handle
+        run: |
+          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m tests/macos/resize.m -o "$RUNNER_TEMP/resize-test"
+          "$RUNNER_TEMP/resize-test"
       - name: Register and remove an actual login item
         run: |
           app="$HOME/Applications/WaterflowLoginProbe.app"

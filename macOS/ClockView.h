@@ -9,4 +9,10 @@
 @property(nonatomic) NSInteger scale;
 @property(nonatomic, copy) NSString *fontName;
 + (NSSize)sizeForScale:(NSInteger)scale;
++ (NSSize)sizeForWidth:(CGFloat)width;
+@end
+
+@interface ClockResizeHandle : NSView
+@property(nonatomic, copy) void (^didFinishResize)(NSSize size);
++ (NSRect)frameByDragging:(NSSize)delta fromFrame:(NSRect)initial;
 @end

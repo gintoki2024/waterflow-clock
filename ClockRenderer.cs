@@ -37,6 +37,7 @@ internal sealed class ClockRenderer : IDisposable
     private readonly Bitmap digitLayer;
 
     public Size Size { get; private set; }
+    public Size PresetSize { get; private set; }
     public bool AutoColor { get; set; }
     private bool hasPalette, useDarkInk;
     private double nextSample;
@@ -57,7 +58,7 @@ internal sealed class ClockRenderer : IDisposable
         public double Changed;
     }
 
-    public ClockRenderer(string fontName, ClockTheme theme, ClockScale scale, ClockFlowStyle flowStyle)
+    public ClockRenderer(string fontName, ClockTheme theme, ClockScale scale, ClockFlowStyle flowStyle, int zoom = 10000)
     {
         this.theme = theme;
         this.flowStyle = flowStyle;
@@ -147,9 +148,27 @@ internal sealed class ClockRenderer : IDisposable
             digits[i] = new Digit();
         }
 
-        Size = new Size(
+        PresetSize = new Size(
             (int)Math.Ceiling(cardW + shadowMargin * 2f),
             (int)Math.Ceiling(cardH + shadowMargin * 2f));
+        zoom = Options.ClampZoom(zoom);
+        Size = SizeAtZoom(PresetSize, zoom);
+        if (zoom != 10000)
+        {
+            float factor = zoom / 10000f;
+            using (Matrix transform = new Matrix())
+            {
+                transform.Scale(factor, factor);
+                foreach (GraphicsPath glyph in glyphs) glyph.Transform(transform);
+            }
+            for (int i = 0; i < centers.Length; i++) centers[i] *= factor;
+            digitWidth *= factor;
+            digitHeight *= factor;
+            rowHeight *= factor;
+            centerY *= factor;
+            cornerRadius *= factor;
+            cardRect = new RectangleF(cardRect.X * factor, cardRect.Y * factor, cardRect.Width * factor, cardRect.Height * factor);
+        }
 
         int pixelBytes = Size.Width * Size.Height * 4;
         // Digit-pair gaps and colon midpoints stay clear throughout the vertical animations.
@@ -191,6 +210,12 @@ internal sealed class ClockRenderer : IDisposable
             case ClockScale.Large: return 106f;
             default: return 82f;
         }
+    }
+
+    internal static Size SizeAtZoom(Size preset, int zoom)
+    {
+        double factor = Options.ClampZoom(zoom) / 10000.0;
+        return new Size((int)Math.Round(preset.Width * factor), (int)Math.Round(preset.Height * factor));
     }
 
     private static FontFamily ResolveFontFamily(string preferred)

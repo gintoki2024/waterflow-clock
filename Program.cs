@@ -42,6 +42,8 @@ internal sealed class ClockWindow : Form
     readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
 
     bool dragging;
+    bool resizing;
+    int initialZoom, previewZoom;
     Point dragCursor, dragLocation;
     bool editing;
 
@@ -178,7 +180,7 @@ internal sealed class ClockWindow : Form
 
     ClockRenderer CreateRenderer()
     {
-        return new ClockRenderer(options.FontName, options.Theme, options.Scale, options.FlowStyle)
+        return new ClockRenderer(options.FontName, options.Theme, options.Scale, options.FlowStyle, options.Zoom)
         {
             AutoColor = options.AutoColor
         };
@@ -250,7 +252,9 @@ internal sealed class ClockWindow : Form
     {
         base.OnMouseDown(e);
         if (e.Button != MouseButtons.Left) return;
-        dragging = true;
+        resizing = ResizeGrip(ClientSize).Contains(e.Location);
+        dragging = !resizing;
+        initialZoom = previewZoom = options.Zoom;
         dragCursor = Cursor.Position;
         dragLocation = Location;
         Capture = true;
@@ -259,6 +263,19 @@ internal sealed class ClockWindow : Form
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        Cursor = resizing || ResizeGrip(ClientSize).Contains(e.Location) ? Cursors.SizeNWSE : Cursors.Default;
+        if (resizing)
+        {
+            Point pointer = Cursor.Position;
+            previewZoom = ZoomAfterDrag(renderer.PresetSize, initialZoom, pointer.X - dragCursor.X, pointer.Y - dragCursor.Y);
+            Size target = ClockRenderer.SizeAtZoom(renderer.PresetSize, previewZoom);
+            if (Size != target)
+            {
+                Size = target;
+                DrawFrame();
+            }
+            return;
+        }
         if (!dragging) return;
         Point p = Cursor.Position;
         Location = new Point(dragLocation.X + p.X - dragCursor.X, dragLocation.Y + p.Y - dragCursor.Y);
@@ -268,28 +285,96 @@ internal sealed class ClockWindow : Form
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        if (dragging)
+        if ((dragging || resizing) && e.Button == MouseButtons.Left)
         {
-            dragging = false;
+            FinishDrag();
             Capture = false;
-            FitScreen();
-            SavePosition();
-            DrawFrame();
         }
         if (e.Button == MouseButtons.Right) menu.Show(Cursor.Position);
     }
 
     protected override void OnMouseCaptureChanged(EventArgs e)
     {
-        dragging = false;
         base.OnMouseCaptureChanged(e);
+        if (!Capture && (dragging || resizing) && !IsDisposed && !Disposing) FinishDrag();
+    }
+
+    void FinishDrag()
+    {
+        bool resized = resizing && options.Zoom != previewZoom;
+        resizing = dragging = false;
+        if (resized)
+        {
+            options.Zoom = previewZoom;
+            var updated = CreateRenderer();
+            renderer.Dispose();
+            renderer = updated;
+            Size = renderer.Size;
+        }
+        FitScreen();
+        SavePosition();
+        DrawFrame();
+    }
+
+    internal static int ZoomAfterDrag(Size preset, int start, int dx, int dy)
+    {
+        double width = preset.Width, height = preset.Height;
+        double delta = (dx * width + dy * height) / (width * width + height * height);
+        return Options.ClampZoom((int)Math.Round(start + delta * 10000));
+    }
+
+    internal static Rectangle ResizeGrip(Size size)
+    {
+        return new Rectangle(size.Width - 25, size.Height - 25, 24, 24);
+    }
+
+    internal static void PaintGrip(Bitmap frame, bool visible)
+    {
+        Rectangle grip = ResizeGrip(frame.Size);
+        using (Graphics g = Graphics.FromImage(frame))
+        using (SolidBrush hitSurface = new SolidBrush(Color.FromArgb(1, 0, 0, 0)))
+        {
+            // Windows sends mouse events only to nontransparent layered-window pixels.
+            g.FillRectangle(hitSurface, grip);
+            if (!visible) return;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (Pen outline = new Pen(Color.FromArgb(175, 22, 32, 46), 3.6f))
+            using (Pen light = new Pen(Color.FromArgb(235, 238, 246, 255), 1.5f))
+            {
+                for (int d = 5; d <= 13; d += 4)
+                {
+                    Point a = new Point(grip.Right - 4 - d, grip.Bottom - 4);
+                    Point b = new Point(grip.Right - 4, grip.Bottom - 4 - d);
+                    g.DrawLine(outline, a, b);
+                    g.DrawLine(light, a, b);
+                }
+            }
+        }
     }
 
     void DrawFrame()
     {
         if (!IsHandleCreated || IsDisposed) return;
+        bool showGrip = resizing || Bounds.Contains(Cursor.Position);
         using (var bitmap = renderer.Render(DateTime.Now, options.Twelve, Location, wallpaper))
+        {
+            if (resizing && bitmap.Size != Size)
+            {
+                using (var preview = new Bitmap(Width, Height, PixelFormat.Format32bppPArgb))
+                {
+                    using (var g = Graphics.FromImage(preview))
+                    {
+                        g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                        g.DrawImage(bitmap, new Rectangle(Point.Empty, preview.Size));
+                    }
+                    PaintGrip(preview, true);
+                    LayeredSurface.Draw(Handle, Location, preview);
+                }
+                return;
+            }
+            PaintGrip(bitmap, showGrip);
             LayeredSurface.Draw(Handle, Location, bitmap);
+        }
     }
 
     [DllImport("user32.dll", SetLastError = true)]

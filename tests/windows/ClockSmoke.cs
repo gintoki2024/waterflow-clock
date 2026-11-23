@@ -17,6 +17,7 @@ internal static class ClockSmoke
         {
             CheckRendering(wallpaper);
             CheckHours(wallpaper);
+            CheckResize(wallpaper);
         }
         if (Array.IndexOf(args, "--renderer-only") < 0) CheckWindow();
         Console.WriteLine("Windows clock smoke checks passed.");
@@ -57,6 +58,33 @@ internal static class ClockSmoke
         using (var renderer = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Compact, ClockFlowStyle.MinimalGlide))
         using (var bitmap = renderer.Render(new DateTime(2024, 1, 1, hour, 0, 0), twelve, Point.Empty, wallpaper))
             return Pixels(bitmap);
+    }
+
+    private static void CheckResize(Wallpaper wallpaper)
+    {
+        using (var normal = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Standard, ClockFlowStyle.MinimalGlide))
+        {
+            Size preset = normal.Size;
+            int drag = ClockWindow.ZoomAfterDrag(preset, 10000, preset.Width / 2, preset.Height / 2);
+            if (Math.Abs(drag - 15000) > 50 || ClockWindow.ZoomAfterDrag(preset, 15000, 0, 0) != 15000 ||
+                ClockWindow.ZoomAfterDrag(preset, 10000, -5000, -5000) != 5000 ||
+                ClockWindow.ZoomAfterDrag(preset, 10000, 5000, 5000) != 25000)
+                throw new Exception("Unexpected proportional drag or zoom limits.");
+            using (var resized = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Standard, ClockFlowStyle.MinimalGlide, drag))
+            using (var frame = resized.Render(DateTime.Now, false, Point.Empty, wallpaper))
+            {
+                if (resized.PresetSize != preset || frame.Size != ClockRenderer.SizeAtZoom(preset, drag) ||
+                    Math.Abs(frame.Width / (double)preset.Width - frame.Height / (double)preset.Height) > .005)
+                    throw new Exception("Resize preview and final aspect ratio disagree.");
+                Rectangle grip = ClockWindow.ResizeGrip(frame.Size);
+                ClockWindow.PaintGrip(frame, false);
+                if (frame.GetPixel(grip.X + 1, grip.Y + 1).A == 0)
+                    throw new Exception("Transparent clock grip cannot receive a click.");
+                byte[] before = Pixels(frame);
+                ClockWindow.PaintGrip(frame, true);
+                if (Same(before, Pixels(frame))) throw new Exception("Resize grip did not appear.");
+            }
+        }
     }
 
     private static void CheckHours(Wallpaper wallpaper)

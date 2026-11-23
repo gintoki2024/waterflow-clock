@@ -54,8 +54,11 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
 }
 
 + (NSSize)sizeForScale:(NSInteger)scale {
-    CGFloat unit = ClockUnit(scale);
-    return NSMakeSize(ceil(unit*6.35), ceil(unit*3.30));
+    return [self sizeForWidth:ClockUnit(scale)*6.35];
+}
++ (NSSize)sizeForWidth:(CGFloat)width {
+    CGFloat w = isfinite(width) ? MAX(160,MIN(2400,width)) : ClockUnit(1)*6.35;
+    return NSMakeSize(w,w*3.30/6.35);
 }
 - (BOOL)isOpaque { return NO; }
 - (BOOL)mouseDownCanMoveWindow { return YES; }
@@ -111,7 +114,7 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
     [self prepareGlyphs];
     CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
     CGContextClearRect(ctx,dirtyRect);
-    CGFloat unit = ClockUnit(self.scale);
+    CGFloat unit = MIN(NSWidth(self.bounds)/6.35, NSHeight(self.bounds)/3.30);
     CGFloat center = NSMidY(self.bounds), x = NSMidX(self.bounds)-unit*2.76;
     NSTimeInterval absolute = NSDate.date.timeIntervalSince1970;
     time_t second = (time_t)floor(absolute);
@@ -174,5 +177,47 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
         [self paintDigit:_digits[i] x:cx-drift*(1-p) y:center-unit*(1-p)+overshoot unit:unit
                    depth:1-p alpha:pow(p,.62) tilt:_tilt[i] context:ctx];
     }
+}
+@end
+
+@implementation ClockResizeHandle {
+    NSRect _startFrame;
+    NSPoint _startMouse;
+}
++ (NSRect)frameByDragging:(NSSize)delta fromFrame:(NSRect)initial {
+    // Project the pointer's movement onto the lower-right diagonal.
+    CGFloat aspect = NSHeight(initial)/NSWidth(initial);
+    CGFloat width = NSWidth(initial)+(delta.width-aspect*delta.height)/(1+aspect*aspect);
+    NSSize size = [ClockView sizeForWidth:width];
+    return NSMakeRect(NSMinX(initial),NSMaxY(initial)-size.height,size.width,size.height);
+}
+- (BOOL)mouseDownCanMoveWindow { return NO; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
+- (void)drawRect:(NSRect)rect {
+    // A faint hit surface also makes this corner reachable on a fully transparent window.
+    NSRect hit = NSInsetRect(self.bounds,2,2);
+    [[NSColor colorWithWhite:.5 alpha:.10] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:hit xRadius:6 yRadius:6] fill];
+    NSBezierPath *grip = [NSBezierPath bezierPath];
+    for (NSInteger offset=0; offset<=5; offset+=5) {
+        [grip moveToPoint:NSMakePoint(7+offset,7)];
+        [grip lineToPoint:NSMakePoint(20,20-offset)];
+    }
+    grip.lineCapStyle = NSRoundLineCapStyle;
+    [[NSColor colorWithWhite:0 alpha:.45] setStroke]; grip.lineWidth = 2.5; [grip stroke];
+    [[NSColor colorWithWhite:1 alpha:.76] setStroke]; grip.lineWidth = 1; [grip stroke];
+}
+- (void)mouseDown:(NSEvent *)event {
+    _startFrame = self.window.frame;
+    _startMouse = [self.window convertPointToScreen:event.locationInWindow];
+}
+- (void)mouseDragged:(NSEvent *)event {
+    NSPoint p = [self.window convertPointToScreen:event.locationInWindow];
+    NSSize delta = NSMakeSize(p.x-_startMouse.x,p.y-_startMouse.y);
+    [self.window setFrame:[ClockResizeHandle frameByDragging:delta fromFrame:_startFrame] display:YES];
+}
+- (void)mouseUp:(NSEvent *)event {
+    if (self.didFinishResize && !NSEqualSizes(_startFrame.size,self.window.frame.size))
+        self.didFinishResize(self.window.frame.size);
 }
 @end
