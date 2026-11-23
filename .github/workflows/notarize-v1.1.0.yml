@@ -1,0 +1,92 @@
+name: Sign and notarize the v1.1.0 DMG
+on: workflow_dispatch
+permissions:
+  contents: read
+concurrency: notarize-waterflow-clock-1.1.0
+jobs:
+  notarize:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Verify the exact release input
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP"
+          gh release download v1.1.0 -R "$GITHUB_REPOSITORY" -p WaterflowClock-macOS.zip
+          echo "b3916d0f9ee8c2c65ae968cf590d3bdb5d4fcfb349571d6687396cafc11e53a4  WaterflowClock-macOS.zip" | shasum -a 256 -c -
+          mkdir payload
+          ditto -x -k WaterflowClock-macOS.zip payload
+      - name: Sign the app and image, notarize, and validate
+        env:
+          CERT: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          API_KEY: ${{ secrets.NOTARY_P8 }}
+          KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${CERT:?Developer ID certificate required}" "${CERT_PASSWORD:?P12 password required}" "${API_KEY:?App Store Connect team key required}" "${KEY_ID:?key ID required}" "${ISSUER:?issuer ID required}"
+          cd "$RUNNER_TEMP"
+          app="payload/水流时钟.app"
+          keychain="$RUNNER_TEMP/waterclock-signing.keychain-db"
+          pass="$(openssl rand -hex 32)"
+          security create-keychain -p "$pass" "$keychain"
+          trap 'security delete-keychain "$keychain"; rm -f certificate.p12 Notary.p8' EXIT
+          security unlock-keychain -p "$pass" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          printf '%s' "$CERT" | base64 -D > certificate.p12
+          printf '%s\n' "$API_KEY" > Notary.p8
+          security import certificate.p12 -k "$keychain" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" "$HOME/Library/Keychains/login.keychain-db"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk '/"Developer ID Application:/{print $2}')"
+          [[ "$identity" =~ ^[[:xdigit:]]{40}$ ]]
+          sign() { codesign --force --timestamp --keychain "$keychain" --sign "$identity" "$@"; }
+          notarize() {
+            xcrun notarytool submit "$1" --key Notary.p8 --key-id "$KEY_ID" --issuer "$ISSUER" --wait --timeout 35m --output-format json > result.json
+            jq -e '.status == "Accepted"' result.json
+          }
+          sign --options runtime "$app"
+          codesign --verify --strict --all-architectures "$app"
+          ditto -c -k --keepParent "$app" signed-app.zip
+          notarize signed-app.zip
+          xcrun stapler staple "$app"
+          ln -s /Applications payload/Applications
+          image=WaterflowClock-macOS.dmg
+          hdiutil create -volname 水流时钟 -fs HFS+ -format UDZO -srcfolder payload "$image"
+          sign "$image"
+          notarize "$image"
+          xcrun stapler staple "$image"
+          xcrun stapler validate "$image"
+          spctl -a -t open --context context:primary-signature -vv "$image"
+          mkdir mounted
+          hdiutil attach -readonly -nobrowse -mountpoint "$PWD/mounted" "$image"
+          test "$(readlink mounted/Applications)" = /Applications
+          xcrun stapler validate "mounted/水流时钟.app"
+          spctl -a -t exec -vv "mounted/水流时钟.app"
+          lipo "mounted/水流时钟.app/Contents/MacOS/WaterClock" -verify_arch arm64 x86_64
+          hdiutil detach "$PWD/mounted"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notarized-dmg
+          path: ${{ runner.temp }}/WaterflowClock-macOS.dmg
+          if-no-files-found: error
+  publish:
+    needs: notarize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: notarized-dmg
+      - name: Replace the verified DMG on the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload v1.1.0 WaterflowClock-macOS.dmg --repo "$GITHUB_REPOSITORY" --clobber
+          digest="$(gh release view v1.1.0 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[]|select(.name=="WaterflowClock-macOS.dmg")|.digest')"
+          test "$digest" = "sha256:$(sha256sum WaterflowClock-macOS.dmg | cut -d' ' -f1)"
