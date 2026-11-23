@@ -1,0 +1,39 @@
+name: macOS
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build universal app
+        run: bash macOS/build.sh "$RUNNER_TEMP/dist"
+      - name: Exercise clock rendering
+        run: |
+          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m tests/macos/render.m -o "$RUNNER_TEMP/render-test"
+          "$RUNNER_TEMP/render-test"
+      - name: Start packaged application
+        run: |
+          ditto -x -k "$RUNNER_TEMP/dist/水流时钟-macOS.zip" "$RUNNER_TEMP/unpacked"
+          app="$RUNNER_TEMP/unpacked/水流时钟.app"
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/MacOS/WaterClock" &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          sleep 5
+          kill -0 "$pid"
+      - if: matrix.os == 'macos-15'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: ${{ runner.temp }}/dist/水流时钟-macOS.zip
+          if-no-files-found: error

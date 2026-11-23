@@ -1,0 +1,38 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile application and smoke tests
+        shell: pwsh
+        run: |
+          $csc = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+          $flags = '/nologo', '/optimize+', '/langversion:5', '/codepage:65001', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll'
+          $sources = (Get-ChildItem -LiteralPath . -Filter '*.cs' -File).FullName
+          New-Item -ItemType Directory -Path dist | Out-Null
+          $app = Join-Path $PWD 'dist/水流时钟.exe'
+          & $csc @flags /target:winexe "/out:$app" @sources
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $checks = Join-Path $env:RUNNER_TEMP 'ClockSmoke.exe'
+          $testSource = (Get-Item -LiteralPath 'tests/windows/ClockSmoke.cs').FullName
+          & $csc @flags /target:exe /main:ClockSmoke "/out:$checks" @sources $testSource
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $checks
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -LiteralPath 'dist/水流时钟.exe' -DestinationPath 'dist/WaterflowClock-Windows.zip'
+      - name: Upload portable Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: dist/WaterflowClock-Windows.zip
+          if-no-files-found: error
