@@ -31,6 +31,16 @@ jobs:
           trap 'kill "$pid" 2>/dev/null || true' EXIT
           sleep 5
           kill -0 "$pid"
+      - name: Register and remove an actual login item
+        run: |
+          app="$HOME/Applications/WaterflowLoginProbe.app"
+          mkdir -p "$app/Contents/MacOS"
+          cp macOS/Info.plist "$app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleIdentifier app.waterclock.ci.login' "$app/Contents/Info.plist"
+          xcrun clang -fobjc-arc -framework Cocoa -framework ServiceManagement -I macOS tests/macos/login.m -o "$app/Contents/MacOS/WaterClock"
+          codesign --force --sign - "$app"
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$app"
+          "$app/Contents/MacOS/WaterClock"
       - if: matrix.os == 'macos-15'
         uses: actions/upload-artifact@v4
         with:

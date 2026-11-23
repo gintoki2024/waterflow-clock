@@ -1,8 +1,10 @@
 #import <Cocoa/Cocoa.h>
 #import <ServiceManagement/ServiceManagement.h>
 #import <QuartzCore/QuartzCore.h>
+#include <math.h>
 #import "ClockView.h"
 #import "InkSampler.h"
+#import "LoginItem.h"
 
 @interface ClockController : NSObject <NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate>
 @end
@@ -29,11 +31,16 @@
     for (NSString *label in labels) [self item:label key:key value:i++ menu:sub];
     [_menu addItemWithTitle:title action:nil keyEquivalent:@""].submenu = sub;
 }
+- (NSSize)preferredSize {
+    NSNumber *width = [_prefs objectForKey:@"customWidth"];
+    return width ? [ClockView sizeForWidth:width.doubleValue] :
+                   [ClockView sizeForScale:[_prefs integerForKey:@"scale"]];
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     _prefs = NSUserDefaults.standardUserDefaults;
     [_prefs registerDefaults:@{@"auto":@YES, @"font":@"随性手写（内置）", @"scale":@1}];
     _sampler = [InkSampler new];
-    NSSize size = [ClockView sizeForScale:[_prefs integerForKey:@"scale"]];
+    NSSize size = [self preferredSize];
     _window = [[NSPanel alloc] initWithContentRect:NSMakeRect(0,0,size.width,size.height)
         styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         backing:NSBackingStoreBuffered defer:NO];
@@ -47,11 +54,17 @@
     _glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     _glass.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     _glass.state = NSVisualEffectStateActive; _glass.wantsLayer = YES;
-    _glass.layer.cornerRadius = 18; _glass.layer.masksToBounds = YES;
+    _glass.layer.cornerRadius = size.width*18./(64*6.35); _glass.layer.masksToBounds = YES;
     [root addSubview:_glass];
     _view = [[ClockView alloc] initWithFrame:root.bounds];
     _view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; _view.wantsLayer = YES;
     [root addSubview:_view];
+    ClockResizeHandle *handle = [[ClockResizeHandle alloc] initWithFrame:NSMakeRect(size.width-27,1,26,26)];
+    handle.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    handle.toolTip = @"拖动以等比例调整时钟大小";
+    NSUserDefaults *settings = _prefs;
+    handle.didFinishResize = ^(NSSize newSize) { [settings setDouble:newSize.width forKey:@"customWidth"]; };
+    [root addSubview:handle];
     _menu = [NSMenu new]; _menu.delegate = self;
     [self choices:@"外观" key:@"theme" labels:@[@"液态磨砂",@"纯净悬浮",@"极简白瓷",@"深海幽蓝"]];
     [self choices:@"流动效果" key:@"flow" labels:@[@"水波溪流",@"精密滚轮",@"静谧水影",@"纯净极简"]];
@@ -93,7 +106,10 @@
     _view.fontName = [_prefs stringForKey:@"font"]; _view.twelve = [_prefs boolForKey:@"twelve"];
     _view.flow = [_prefs integerForKey:@"flow"]; _view.scale = [_prefs integerForKey:@"scale"];
     _view.theme = [_prefs integerForKey:@"theme"]; _view.autoColor = [_prefs boolForKey:@"auto"];
-    [_window setContentSize:[ClockView sizeForScale:_view.scale]];
+    NSSize wanted = [self preferredSize];
+    NSRect frame = _window.frame;
+    if (!NSEqualSizes(frame.size,wanted))
+        [_window setFrame:NSMakeRect(NSMinX(frame),NSMaxY(frame)-wanted.height,wanted.width,wanted.height) display:YES];
     _window.level = [_prefs boolForKey:@"top"] ? NSFloatingWindowLevel : NSNormalWindowLevel;
     _glass.hidden = _view.theme == 1; _window.hasShadow = !_glass.hidden;
     _glass.material = _view.theme == 3 ? NSVisualEffectMaterialHUDWindow : NSVisualEffectMaterialPopover;
@@ -103,12 +119,17 @@
 - (void)windowDidMove:(NSNotification *)note {
     if (_window.visible) [_prefs setObject:NSStringFromPoint(_window.frame.origin) forKey:@"position"];
 }
+- (void)windowDidResize:(NSNotification *)note {
+    _glass.layer.cornerRadius = NSWidth(_window.frame)*18./(64*6.35);
+    [_view setNeedsDisplay:YES];
+}
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     for (NSMenuItem *item in menu.itemArray) {
         NSString *key = item.representedObject;
         if (!key) continue;
         BOOL on = NO;
-        if ([@[@"theme",@"flow",@"scale"] containsObject:key]) on = [_prefs integerForKey:key] == item.tag;
+        if ([key isEqual:@"scale"]) on = fabs(_window.frame.size.width-[ClockView sizeForScale:item.tag].width)<1;
+        else if ([@[@"theme",@"flow"] containsObject:key]) on = [_prefs integerForKey:key] == item.tag;
         else if ([@[@"top",@"auto",@"twelve"] containsObject:key]) on = [_prefs boolForKey:key];
         else if ([key isEqual:@"builtin"]) on = [[_prefs stringForKey:@"font"] isEqual:@"随性手写（内置）"];
         else if ([key isEqual:@"login"]) on = SMAppService.mainAppService.status == SMAppServiceStatusEnabled;
@@ -127,14 +148,17 @@
     if ([key isEqual:@"login"]) {
         SMAppService *service = SMAppService.mainAppService; NSError *error = nil;
         if (service.status == SMAppServiceStatusRequiresApproval) { [SMAppService openSystemSettingsLoginItems]; return; }
-        if (service.status == SMAppServiceStatusEnabled) [service unregisterAndReturnError:&error];
-        else [service registerAndReturnError:&error];
+        ClockSetLoginEnabled(service.status != SMAppServiceStatusEnabled, &error);
         if (error) [[NSAlert alertWithError:error] runModal];
         else if (service.status == SMAppServiceStatusRequiresApproval) [SMAppService openSystemSettingsLoginItems];
         return;
     }
     if ([key isEqual:@"builtin"]) [_prefs setObject:@"随性手写（内置）" forKey:@"font"];
-    else if ([@[@"theme",@"scale",@"flow"] containsObject:key]) [_prefs setInteger:sender.tag forKey:key];
+    else if ([key isEqual:@"scale"]) {
+        [_prefs removeObjectForKey:@"customWidth"];
+        [_prefs setInteger:sender.tag forKey:key];
+    }
+    else if ([@[@"theme",@"flow"] containsObject:key]) [_prefs setInteger:sender.tag forKey:key];
     else [_prefs setBool:![_prefs boolForKey:key] forKey:key];
     [self applySettings];
 }
