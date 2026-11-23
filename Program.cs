@@ -36,7 +36,7 @@ internal sealed class ClockWindow : Form
     readonly Icon trayIcon;
     readonly ContextMenuStrip menu = new ContextMenuStrip();
     readonly ToolStripMenuItem[] themeItems = new ToolStripMenuItem[4];
-    readonly ToolStripMenuItem[] flowItems = new ToolStripMenuItem[4];
+    readonly ToolStripMenuItem[] flowItems = new ToolStripMenuItem[Enum.GetValues(typeof(ClockFlowStyle)).Length];
     readonly ToolStripMenuItem topMostItem;
     readonly ToolStripMenuItem autoColorItem;
     readonly ToolStripMenuItem countdownMode = new ToolStripMenuItem();
@@ -47,6 +47,9 @@ internal sealed class ClockWindow : Form
     int initialZoom, previewZoom;
     Point dragCursor, dragLocation;
     bool editing;
+    long lastRenderedSecond = -1;
+    bool lastGripVisible;
+    bool lastCountdownVisible;
 
     public ClockWindow()
     {
@@ -97,8 +100,8 @@ internal sealed class ClockWindow : Form
         };
         menu.Items.Add(autoColorItem);
 
-        ToolStripMenuItem flowMenu = new ToolStripMenuItem("流动风格");
-        for (int i = 0; i < 4; i++)
+        ToolStripMenuItem flowMenu = new ToolStripMenuItem("数字特效");
+        for (int i = 0; i < flowItems.Length; i++)
         {
             ClockFlowStyle f = (ClockFlowStyle)i;
             ToolStripMenuItem item = new ToolStripMenuItem(Options.GetFlowStyleDisplayName(f));
@@ -134,8 +137,8 @@ internal sealed class ClockWindow : Form
         };
         tray.DoubleClick += delegate { EditOptions(); };
 
-        timer.Interval = 15;
-        timer.Tick += delegate { DrawFrame(); };
+        timer.Interval = 30;
+        timer.Tick += delegate { DrawFrame(false); };
         SystemEvents.UserPreferenceChanged += PreferenceChanged;
         SystemEvents.DisplaySettingsChanged += DisplayChanged;
         Shown += delegate { DrawFrame(); timer.Start(); };
@@ -389,14 +392,32 @@ internal sealed class ClockWindow : Form
         }
     }
 
-    void DrawFrame()
+    void DrawFrame(bool force = true)
     {
         if (!IsHandleCreated || IsDisposed) return;
         bool showGrip = resizing || Bounds.Contains(Cursor.Position);
         Countdown countdown = options.TimerSession;
-        using (var bitmap = countdown != null && countdown.Visible
-            ? renderer.RenderCountdown(countdown, DateTime.UtcNow, Location, wallpaper)
-            : renderer.Render(DateTime.Now, options.Twelve, Location, wallpaper))
+        bool countdownVisible = countdown != null && countdown.Visible;
+        DateTime nowUtc = DateTime.UtcNow;
+        DateTime nowLocal = nowUtc.ToLocalTime();
+        // A duration timer may expire partway through a wall-clock second.
+        long sec = countdownVisible ? countdown.Remaining(nowUtc) : nowLocal.Ticks / TimeSpan.TicksPerSecond;
+        if (countdownVisible && sec == 0 && options.AutoColor)
+            sec = -nowUtc.Ticks / TimeSpan.TicksPerSecond;
+
+        if (!force && !dragging && !resizing && !renderer.IsAnimating &&
+            sec == lastRenderedSecond && showGrip == lastGripVisible && countdownVisible == lastCountdownVisible)
+        {
+            return;
+        }
+
+        lastRenderedSecond = sec;
+        lastGripVisible = showGrip;
+        lastCountdownVisible = countdownVisible;
+
+        using (var bitmap = countdownVisible
+            ? renderer.RenderCountdown(countdown, nowUtc, Location, wallpaper)
+            : renderer.Render(nowLocal, options.Twelve, Location, wallpaper))
         {
             if (resizing && bitmap.Size != Size)
             {

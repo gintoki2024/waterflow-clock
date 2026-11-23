@@ -16,9 +16,11 @@ internal static class ClockSmoke
         using (var wallpaper = new Wallpaper())
         {
             CheckRendering(wallpaper);
+            CheckIllustratedTransitions(wallpaper);
             CheckHours(wallpaper);
             CheckResize(wallpaper);
             CheckCountdown(wallpaper);
+            CheckTargetTime();
         }
         if (Array.IndexOf(args, "--renderer-only") < 0) CheckWindow();
         Console.WriteLine("Windows clock smoke checks passed.");
@@ -54,16 +56,115 @@ internal static class ClockSmoke
         }
     }
 
+    private static void CheckIllustratedTransitions(Wallpaper wallpaper)
+    {
+        var before = new DateTime(2025, 1, 1, 12, 34, 58, DateTimeKind.Utc);
+        var session = Countdown.Start("Test", 18, before);
+        foreach (ClockFlowStyle style in new[] { ClockFlowStyle.EmberBurn, ClockFlowStyle.IceShards, ClockFlowStyle.SplitFlap })
+        foreach (bool countdown in new[] { false, true })
+        {
+            if (!Enum.IsDefined(typeof(ClockFlowStyle), style))
+                throw new Exception("Missing illustrated style " + style);
+            using (var renderer = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Compact, style))
+            {
+                Func<DateTime, Bitmap> frame = t => countdown
+                    ? renderer.RenderCountdown(session, t, Point.Empty, wallpaper)
+                    : renderer.Render(t, false, Point.Empty, wallpaper);
+                DateTime after = before.AddSeconds(1);
+                using (var initial = frame(before))
+                {
+                    using (frame(after)) { }  // Start the monotonic transition at the changed digit.
+                    Thread.Sleep(310);
+                    using (var moving = frame(after))
+                    {
+                        Thread.Sleep(1050);
+                        using (var settled = frame(after))
+                        using (var repeated = frame(after))
+                        {
+                            int cut = initial.Width * 4 / 5;
+                            var ones = new Rectangle(cut, 0, initial.Width - cut, initial.Height);
+                            var fixedDigits = new Rectangle(0, 0, initial.Width * 3 / 4, initial.Height);
+                            if (!HasEffectColor(style == ClockFlowStyle.SplitFlap ? settled : moving, ones, style))
+                                throw new Exception("Missing ember, ice tint or flap hinge: " + style);
+                            if (ChangedPixels(initial, moving, ones) < 10 || ChangedPixels(moving, settled, ones) < 10 ||
+                                ChangedPixels(initial, settled, ones) < 10 || ChangedPixels(initial, moving, fixedDigits) != 0 ||
+                                !Same(Pixels(settled), Pixels(repeated)))
+                                throw new Exception("Incorrect moving or settled frame: " + style + ", countdown=" + countdown);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool HasEffectColor(Bitmap frame, Rectangle area, ClockFlowStyle style)
+    {
+        int hits = 0;
+        for (int y = area.Top; y < area.Bottom; y++)
+            for (int x = area.Left; x < area.Right; x++)
+            {
+                Color c = frame.GetPixel(x, y);
+                if (c.A < 45) continue;
+                if ((style == ClockFlowStyle.EmberBurn && c.R - c.B > 45) ||
+                    (style == ClockFlowStyle.IceShards && c.B - c.R > 40) ||
+                    (style == ClockFlowStyle.SplitFlap && Math.Abs(y - frame.Height / 2) <= 2 &&
+                     c.A >= 150 && c.R < 160 && c.B < 180))
+                    hits++;
+            }
+        return hits >= 3;
+    }
+
+    private static int ChangedPixels(Bitmap a, Bitmap b, Rectangle area)
+    {
+        int count = 0;
+        for (int y = area.Top; y < area.Bottom; y++)
+            for (int x = area.Left; x < area.Right; x++)
+                if (a.GetPixel(x, y) != b.GetPixel(x, y)) count++;
+        return count;
+    }
+
+    private static void CheckTargetTime()
+    {
+        DateTime now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+        DateTime local = new DateTime(2125, 6, 7, 18, 30, 13);
+        var target = Countdown.Until("长期目标", local, eastern, now, null);
+        var restored = Countdown.Restore(target.WithVisibility(false).Store());
+        if (restored == null || !restored.IsTarget || restored.Visible ||
+            TimeZoneInfo.ConvertTimeFromUtc(restored.Deadline, eastern) != local || restored.Deadline != target.Deadline ||
+            restored.Remaining(now) <= int.MaxValue || restored.Remaining(target.Deadline.AddTicks(-1)) != 1)
+            throw new Exception("Target instant, long duration or visibility failed to round-trip.");
+        if (Countdown.Format(360000) != "04:00:00" || target.Caption(360000) != "4 天 · 长期目标" ||
+            Countdown.Format(359999) != "99:59:59" || target.Caption(359999) != target.Name ||
+            Countdown.Format(24L * 3600 * 50000 + 3661) != "01:01:01")
+            throw new Exception("Day and hour countdown display failed at the 100-hour boundary.");
+        string[] old = { "旧倒计时", "300", now.AddMinutes(5).Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), "1" };
+        var migrated = Countdown.Restore(old);
+        if (migrated == null || migrated.IsTarget || migrated.Remaining(now) != 300 || !migrated.Visible)
+            throw new Exception("Legacy duration record failed to load.");
+        DateTime ambiguous = new DateTime(2025, 11, 2, 1, 30, 0);
+        foreach (DateTime invalid in new[] { new DateTime(2024, 1, 1), new DateTime(2025, 3, 9, 2, 30, 0), ambiguous })
+        {
+            try { Countdown.Until("test", invalid, eastern, now, null); }
+            catch (ArgumentException) { continue; }
+            throw new Exception("Accepted a past, skipped or ambiguous local time.");
+        }
+        // An existing absolute target can fall within a repeated hour after a timezone change.
+        var firstOccurrence = Countdown.Until("test", new DateTime(2025, 11, 2, 5, 30, 0), TimeZoneInfo.Utc, now, null);
+        if (Countdown.Until("new name", ambiguous, eastern, now, firstOccurrence).Deadline != firstOccurrence.Deadline)
+            throw new Exception("Editing an unchanged ambiguous target altered its absolute instant.");
+    }
+
     private static byte[] Still(Wallpaper wallpaper, int hour, bool twelve)
     {
-        using (var renderer = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Compact, ClockFlowStyle.MinimalGlide))
+        using (var renderer = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Compact, ClockFlowStyle.SplitFlap))
         using (var bitmap = renderer.Render(new DateTime(2024, 1, 1, hour, 0, 0), twelve, Point.Empty, wallpaper))
             return Pixels(bitmap);
     }
 
     private static void CheckResize(Wallpaper wallpaper)
     {
-        using (var normal = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Standard, ClockFlowStyle.MinimalGlide))
+        using (var normal = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Standard, ClockFlowStyle.SplitFlap))
         {
             Size preset = normal.Size;
             int drag = ClockWindow.ZoomAfterDrag(preset, 10000, preset.Width / 2, preset.Height / 2);
@@ -71,7 +172,7 @@ internal static class ClockSmoke
                 ClockWindow.ZoomAfterDrag(preset, 10000, -5000, -5000) != 5000 ||
                 ClockWindow.ZoomAfterDrag(preset, 10000, 5000, 5000) != 25000)
                 throw new Exception("Unexpected proportional drag or zoom limits.");
-            using (var resized = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Standard, ClockFlowStyle.MinimalGlide, drag))
+            using (var resized = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Standard, ClockFlowStyle.SplitFlap, drag))
             using (var frame = resized.Render(DateTime.Now, false, Point.Empty, wallpaper))
             {
                 if (resized.PresetSize != preset || frame.Size != ClockRenderer.SizeAtZoom(preset, drag) ||
@@ -114,12 +215,20 @@ internal static class ClockSmoke
         using (var active = renderer.RenderCountdown(session, start, Point.Empty, wallpaper))
         using (var renamed = renderer.RenderCountdown(Countdown.Start("读书", session.Duration, start), start, Point.Empty, wallpaper))
         using (var expired = renderer.RenderCountdown(session, session.Deadline, Point.Empty, wallpaper))
-        using (var later = renderer.RenderCountdown(session, session.Deadline.AddDays(5), Point.Empty, wallpaper))
-        using (var clock = renderer.Render(start, false, Point.Empty, wallpaper))
         {
-            if (Same(Pixels(active), Pixels(renamed)) || Same(Pixels(active), Pixels(expired)) ||
-                !Same(Pixels(expired), Pixels(later)) || Same(Pixels(clock), Pixels(expired)))
-                throw new Exception("Countdown caption, digits, zero hold or return-to-clock rendering failed.");
+            if (Same(Pixels(active), Pixels(renamed)))
+                throw new Exception("Changing the countdown name did not change its rendered caption.");
+            if (Same(Pixels(active), Pixels(expired)))
+                throw new Exception("The active and expired countdown frames are identical.");
+
+            // The ripple phase uses elapsed render time, independently of the supplied UTC time.
+            Thread.Sleep(750);
+            using (var later = renderer.RenderCountdown(session, session.Deadline.AddDays(5), Point.Empty, wallpaper))
+                if (!Same(Pixels(expired), Pixels(later)))
+                    throw new Exception("The expired countdown continued animating after reaching zero.");
+            using (var clock = renderer.Render(start, false, Point.Empty, wallpaper))
+                if (Same(Pixels(clock), Pixels(expired)))
+                    throw new Exception("Returning to the clock did not replace the expired countdown.");
         }
     }
 

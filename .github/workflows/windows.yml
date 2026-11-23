@@ -30,6 +30,22 @@ jobs:
           & $checks
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -LiteralPath 'dist/水流时钟.exe' -DestinationPath 'dist/WaterflowClock-Windows.zip'
+      - name: Start the extracted release executable
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'portable-clock'
+          Expand-Archive -LiteralPath 'dist/WaterflowClock-Windows.zip' -DestinationPath $dir
+          $exe = Join-Path $dir '水流时钟.exe'
+          if ((Get-FileHash $exe).Hash -ne (Get-FileHash 'dist/水流时钟.exe').Hash) { throw 'ZIP binary differs from build' }
+          $process = Start-Process -FilePath $exe -WorkingDirectory $dir -PassThru
+          try {
+            if (!$process.WaitForInputIdle(15000)) { throw 'Desktop message loop did not start' }
+            Start-Sleep -Seconds 3
+            $process.Refresh()
+            if ($process.HasExited -or !$process.Responding) { throw 'Packaged application failed its launch check' }
+          } finally {
+            if (!$process.HasExited) { Stop-Process -Id $process.Id }
+          }
       - name: Upload portable Windows build
         uses: actions/upload-artifact@v4
         with:

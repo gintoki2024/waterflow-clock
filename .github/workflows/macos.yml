@@ -25,6 +25,10 @@ jobs:
         run: |
           xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m macOS/ClockCountdown.m tests/macos/countdown.m -o "$RUNNER_TEMP/countdown-test"
           "$RUNNER_TEMP/countdown-test"
+      - name: Exercise renderer lifetime and memory under repeated drawing
+        run: |
+          xcrun clang -O2 -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m macOS/ClockCountdown.m tests/macos/stress.m -o "$RUNNER_TEMP/stress"
+          "$RUNNER_TEMP/stress"
       - name: Start packaged application
         run: |
           ditto -x -k "$RUNNER_TEMP/dist/水流时钟-macOS.zip" "$RUNNER_TEMP/unpacked"
@@ -58,9 +62,16 @@ jobs:
         run: |
           xcrun clang -fobjc-arc -mmacosx-version-min=13.0 -framework Cocoa -framework CoreText -framework CoreGraphics -framework ScreenCaptureKit -I macOS macOS/ClockView.m macOS/ClockCountdown.m macOS/InkSampler.m tests/macos/ink.m -o "$RUNNER_TEMP/ink-test"
           "$RUNNER_TEMP/ink-test"
+      - name: Package and test the drag-to-install DMG
+        if: matrix.os == 'macos-15'
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' macOS/Info.plist)
+          bash macOS/package-dmg.sh "$RUNNER_TEMP/dist/水流时钟-macOS.zip" "$RUNNER_TEMP/dist/WaterflowClock-macOS.dmg" "v$version"
       - if: matrix.os == 'macos-15'
         uses: actions/upload-artifact@v4
         with:
           name: macos-package
-          path: ${{ runner.temp }}/dist/水流时钟-macOS.zip
+          path: |
+            ${{ runner.temp }}/dist/水流时钟-macOS.zip
+            ${{ runner.temp }}/dist/WaterflowClock-macOS.dmg
           if-no-files-found: error

@@ -39,8 +39,11 @@
         while (j && samples[j-1] > value) { samples[j] = samples[j-1]; --j; }
         samples[j] = value;
     }
-    view.darkInk = samples[4] > (view.darkInk ? 107 : 132);
-    [view setNeedsDisplay:YES];
+    BOOL dark = samples[4] > (view.darkInk ? 107 : 132);
+    if (dark != view.darkInk) {
+        view.darkInk = dark;
+        [view setNeedsDisplay:YES];
+    }
 }
 
 - (void)updateView:(ClockView *)view {
@@ -52,7 +55,10 @@
         if (view.theme == 1)
             light = [[view.effectiveAppearance bestMatchFromAppearancesWithNames:
                 @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]] isEqual:NSAppearanceNameAqua];
-        view.darkInk = light;
+        if (light != view.darkInk) {
+            view.darkInk = light;
+            [view setNeedsDisplay:YES];
+        }
         return;
     }
     NSWindow *window = view.window;

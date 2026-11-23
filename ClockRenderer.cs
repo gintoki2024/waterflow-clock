@@ -6,7 +6,7 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
 
-internal sealed class ClockRenderer : IDisposable
+internal sealed partial class ClockRenderer : IDisposable
 {
     internal const int Duration = 880;
     private const double CascadeStepMs = 52.0;
@@ -35,11 +35,20 @@ internal sealed class ClockRenderer : IDisposable
     private int cachedWallpaperVersion = -1;
 
     private readonly Bitmap digitLayer;
+    private Bitmap[] cachedPrimaryGlyphs;
+    private Bitmap[] cachedSecondsGlyphs;
+    private int glyphPadX, glyphPadY, glyphBmpW, glyphBmpH;
+    private Color cachedPrimaryInk, cachedSecondsInk;
+    private bool cachedGlyphShadow;
+    private Bitmap emberOldBmp, emberNewBmp, emberOutBmp;
+    private byte[] emberOldBuf, emberNewBuf, emberOutBuf;
+    private int emberBufW, emberBufH;
     private Font captionFont;
     private bool showingCountdown;
 
     public Size Size { get; private set; }
     public Size PresetSize { get; private set; }
+    public bool IsAnimating { get; private set; }
     public bool AutoColor { get; set; }
     private bool hasPalette, useDarkInk;
     private double nextSample;
@@ -240,16 +249,16 @@ internal sealed class ClockRenderer : IDisposable
 
     internal Bitmap RenderCountdown(Countdown session, DateTime utcNow, Point origin, Wallpaper wallpaper)
     {
-        int seconds = session.Remaining(utcNow);
-        return RenderValues(Countdown.Format(seconds), 0,
-            seconds == 0 ? "时间到 · " + session.Name : session.Name, origin, wallpaper);
+        long seconds = session.Remaining(utcNow);
+        return RenderValues(Countdown.Format(seconds), 0, session.Caption(seconds), origin, wallpaper, seconds == 0);
     }
 
-    private Bitmap RenderValues(string value, double fraction, string caption, Point screenOrigin, Wallpaper wallpaper)
+    private Bitmap RenderValues(string value, double fraction, string caption, Point screenOrigin, Wallpaper wallpaper, bool expired = false)
     {
         EnsureBackgroundCache(screenOrigin, wallpaper);
 
         bool countdown = caption != null;
+        bool illustrated = flowStyle >= ClockFlowStyle.EmberBurn;
         bool modeChanged = countdown != showingCountdown;
         showingCountdown = countdown;
         double now = timer.Elapsed.TotalMilliseconds;
@@ -263,7 +272,7 @@ internal sealed class ClockRenderer : IDisposable
             if (index == 2 || index == 5) continue;
             Digit digit = digits[index];
             char targetChar = value[index];
-            if (digit.Value == 0 || countdown || modeChanged)
+            if (digit.Value == 0 || (countdown && !illustrated) || expired || modeChanged)
             {
                 digit.Value = targetChar;
                 digit.OldValue = '\0';
@@ -295,11 +304,12 @@ internal sealed class ClockRenderer : IDisposable
             Color secondsColor = GetSecondsDigitColor();
             Color colonColor = GetColonColor();
             bool drawDropShadow = (theme == ClockTheme.PureFloating);
-            bool enableShimmer = (flowStyle != ClockFlowStyle.MinimalGlide);
+            bool enableShimmer = true;
 
             // Smooth breathing colon synced to each second
             double phase = fraction * Math.PI * 2.0;
-            float colonAlpha = (float)(0.52 + 0.43 * (0.5 + 0.5 * Math.Cos(phase)));
+            float colonAlpha = illustrated ? .85f : (float)(0.52 + 0.43 * (0.5 + 0.5 * Math.Cos(phase)));
+            bool anyAnimating = (!countdown && flowStyle == ClockFlowStyle.LiquidStream);
 
             for (int index = 0; index < 8; index++)
             {
@@ -316,11 +326,23 @@ internal sealed class ClockRenderer : IDisposable
                 if (!countdown && flowStyle == ClockFlowStyle.LiquidStream && index == 7)
                 {
                     RenderContinuousSecondsStream(g, value[7] - '0', fraction, x, ink, drawDropShadow);
+                    PaintLiquidBubbles(g, x, now, ink);
                     continue;
                 }
 
                 Digit digit = digits[index];
                 double elapsed = now - digit.Changed;
+
+                if (illustrated)
+                {
+                    double dur = flowStyle == ClockFlowStyle.SplitFlap ? 640.0
+                        : flowStyle == ClockFlowStyle.IceShards ? 880.0 : 860.0;
+                    if (digit.OldValue != 0 && elapsed < dur + 32.0) anyAnimating = true;
+                    PaintTransition(g, digit, x, ink, elapsed);
+                    continue;
+                }
+
+                if (digit.OldValue != 0 && elapsed < Duration + ShimmerTailMs + 32.0) anyAnimating = true;
 
                 // Waiting for right-to-left cascade stagger
                 if (digit.OldValue != 0 && elapsed < 0)
@@ -336,14 +358,6 @@ internal sealed class ClockRenderer : IDisposable
                     float ease = ComputeEase(t);
                     float travel = rowHeight * 1.08f;
 
-                    // Optional buoyant micro-overshoot in PrecisionCylinder mode
-                    float overshootPx = 0f;
-                    if (flowStyle == ClockFlowStyle.PrecisionCylinder && t > 0.52)
-                    {
-                        double bt = (t - 0.52) / 0.48;
-                        overshootPx = (float)(Math.Sin(bt * Math.PI) * (1.0 - bt) * rowHeight * 0.045);
-                    }
-
                     // Departing digit glides UP into top reserved space
                     float oldY = centerY - travel * ease;
                     float oldSx, oldSy;
@@ -352,12 +366,12 @@ internal sealed class ClockRenderer : IDisposable
                     PaintDigit(g, digit.OldValue, x, oldY, oldSx, oldSy, ink, oldAlpha, drawDropShadow, -1f);
 
                     // Arriving digit rises UP from bottom reserved space into center
-                    float newY = centerY + travel * (1.0f - ease) - overshootPx;
+                    float newY = centerY + travel * (1.0f - ease);
                     float newSx, newSy;
                     ComputePerspective(newY, out newSx, out newSy);
                     float newAlpha = (float)Math.Pow(ease, 0.44);
 
-                    // Effect #5: Arrival specular shimmer starting in the final 30% of glide
+                    // Arrival specular shimmer starting in the final 30% of glide
                     float shimmer = enableShimmer ? ComputeShimmerProgress(elapsed) : -1f;
                     PaintDigit(g, digit.Value, x, newY, newSx, newSy, ink, newAlpha, drawDropShadow, shimmer);
                 }
@@ -367,6 +381,7 @@ internal sealed class ClockRenderer : IDisposable
                     PaintDigit(g, digit.Value, x, centerY, 1.0f, 1.0f, ink, 1.0f, drawDropShadow, shimmer);
                 }
             }
+            IsAnimating = anyAnimating && !expired;
         }
 
         // Composite digit layer onto cached background (with Effect #2 waterline refraction + bokeh dissolve)
@@ -456,42 +471,46 @@ internal sealed class ClockRenderer : IDisposable
         }
     }
 
+    private void PaintLiquidBubbles(Graphics g, float x, double nowMs, Color ink)
+    {
+        // Delicate translucent micro-bubbles drifting upward along the continuous liquid seconds column
+        float tSec = (float)(nowMs * 0.001);
+        for (int b = 0; b < 7; b++)
+        {
+            float h1 = EffectProcedural.Hash01(b * 43 + 17);
+            float h2 = EffectProcedural.Hash01(b * 79 + 31);
+            float cycle = (tSec * (0.28f + 0.24f * h1) + h2) % 1f;
+            float env = (float)Math.Sin(cycle * Math.PI);
+            if (env < 0.05f) continue;
+
+            float bx = x + (h1 - 0.5f) * digitWidth * 0.95f + (float)Math.Sin(cycle * 7.5f + b * 2.1f) * 3.2f;
+            float by = centerY + rowHeight * 1.25f - cycle * rowHeight * 2.5f;
+            float r = Math.Max(1.0f, digitHeight * (0.015f + 0.016f * h2));
+            int rimA = (int)(62 * env);
+            int hiA = (int)(110 * env);
+
+            using (var rim = new Pen(Color.FromArgb(rimA, ink.R, ink.G, ink.B), 0.9f))
+                g.DrawEllipse(rim, bx - r, by - r, r * 2f, r * 2f);
+            using (var hi = new SolidBrush(Color.FromArgb(hiA, 255, 255, 255)))
+                g.FillEllipse(hi, bx - r * 0.45f, by - r * 0.55f, r * 0.55f, r * 0.55f);
+        }
+    }
+
     private float ComputeEase(double t)
     {
-        if (flowStyle == ClockFlowStyle.PrecisionCylinder)
-        {
-            // Crisp mechanical acceleration with silky deceleration
-            return (float)(1.0 - Math.Pow(1.0 - t, 3.2));
-        }
         // Calm liquid sine-in-out blended with gentle deceleration
         double sineEase = 0.5 - 0.5 * Math.Cos(Math.PI * t);
         double decelEase = 1.0 - Math.Pow(1.0 - t, 2.2);
         return (float)(sineEase * 0.68 + decelEase * 0.32);
     }
 
-    // Effect #3: 3D cylindrical roller perspective
     private void ComputePerspective(float y, out float scaleX, out float scaleY)
     {
         double norm = Math.Min(1.0, Math.Abs(y - centerY) / (rowHeight * 1.48));
         double theta = norm * (Math.PI * 0.45);
         double cosT = Math.Cos(theta);
-
-        if (flowStyle == ClockFlowStyle.PrecisionCylinder)
-        {
-            scaleY = (float)Math.Max(0.28, cosT);
-            scaleX = 1.0f - 0.07f * (1.0f - scaleY);
-        }
-        else if (flowStyle == ClockFlowStyle.LiquidStream)
-        {
-            scaleY = (float)(1.0 - 0.28 * (1.0 - cosT));
-            scaleX = 1.0f - 0.04f * (1.0f - scaleY);
-        }
-        else
-        {
-            float s = 1.0f - 0.06f * (float)(norm * norm);
-            scaleX = s;
-            scaleY = s;
-        }
+        scaleY = (float)(1.0 - 0.28 * (1.0 - cosT));
+        scaleX = 1.0f - 0.04f * (1.0f - scaleY);
     }
 
     private static float ComputeShimmerProgress(double elapsed)
@@ -506,33 +525,89 @@ internal sealed class ClockRenderer : IDisposable
     {
         int w = Size.Width;
         int h = Size.Height;
-        bool useRipple = (flowStyle == ClockFlowStyle.LiquidStream || flowStyle == ClockFlowStyle.CalmRipple);
+        bool useLiquidOptics = !showingCountdown && flowStyle == ClockFlowStyle.LiquidStream;
+        float tSec = (float)(nowMs * 0.001);
 
         if (cachedBgPixels == null)
+        {
             Array.Clear(outputPixels, 0, outputPixels.Length);
+        }
         else
+        {
             Buffer.BlockCopy(cachedBgPixels, 0, outputPixels, 0, outputPixels.Length);
+
+            // Live underwater caustic shimmer on the LiquidStream glass tank background (4x4 block evaluated = 16x faster)
+            if (useLiquidOptics)
+            {
+                bool light = (theme == ClockTheme.PorcelainLight);
+                float gain = light ? 14f : 26f;
+                int yMin = Math.Max(0, (int)Math.Ceiling(cardRect.Top));
+                int yMax = Math.Min(h - 1, (int)Math.Floor(cardRect.Bottom));
+                int xMin = Math.Max(0, (int)Math.Ceiling(cardRect.Left));
+                int xMax = Math.Min(w - 1, (int)Math.Floor(cardRect.Right));
+                for (int by = yMin; by <= yMax; by += 4)
+                {
+                    int byEnd = Math.Min(yMax, by + 3);
+                    for (int bx = xMin; bx <= xMax; bx += 4)
+                    {
+                        float caustic = EffectProcedural.SampleCaustic((bx + 1.5f) * 0.55f, (by + 1.5f) * 0.55f, tSec);
+                        if (caustic <= 0.03f) continue;
+                        int addB = (int)(caustic * gain * 1.15f);
+                        int addG = (int)(caustic * gain * 0.95f);
+                        int addR = (int)(caustic * gain * 0.65f);
+                        int bxEnd = Math.Min(xMax, bx + 3);
+                        for (int y = by; y <= byEnd; y++)
+                        {
+                            int rowOff = y * w * 4;
+                            for (int x = bx; x <= bxEnd; x++)
+                            {
+                                int idx = rowOff + (x << 2);
+                                int da = outputPixels[idx + 3];
+                                if (da < 160) continue;
+                                int nb = outputPixels[idx] + addB;
+                                int ng = outputPixels[idx + 1] + addG;
+                                int nr = outputPixels[idx + 2] + addR;
+                                outputPixels[idx] = (byte)(nb > da ? da : nb);
+                                outputPixels[idx + 1] = (byte)(ng > da ? da : ng);
+                                outputPixels[idx + 2] = (byte)(nr > da ? da : nr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         for (int y = 0, rowOffset = 0; y < h; y++, rowOffset += w * 4)
         {
             int m = rowMask[y];
             if (m == 0) continue;
 
-            bool rippleRow = useRipple && m < 255;
-            double waveShift = 0.0;
-            float bokehSpread = 0f;
-            if (rippleRow)
+            // Fast bounding-span scan: skip completely empty rows and empty left/right margins!
+            int minX = w, maxX = -1;
+            for (int x = 0, aIdx = rowOffset + 3; x < w; x++, aIdx += 4)
             {
-                // Effect #2: Gentle flowing waterline refraction + soft bokeh diffusion
-                double depth = (255 - m) / 255.0;
-                waveShift = Math.Sin(y * 0.17 - nowMs * 0.0042) * (depth * depth) * 3.8;
-                bokehSpread = 0.55f + (float)(depth * 2.2);
+                if (digitPixels[aIdx] != 0)
+                {
+                    if (x < minX) minX = x;
+                    maxX = x;
+                }
             }
+            if (maxX < minX) continue;
 
-            for (int x = 0, idx = rowOffset; x < w; x++, idx += 4)
+            bool refractRow = useLiquidOptics && m < 255;
+            int xStart = refractRow ? Math.Max(0, minX - 11) : minX;
+            int xEnd = refractRow ? Math.Min(w - 1, maxX + 11) : maxX;
+
+            double depth = refractRow ? (255 - m) / 255.0 : 0.0;
+            float bokehSpread = refractRow ? (0.65f + (float)(depth * 2.8)) : 0f;
+            float dispStrength = refractRow ? (float)(depth * depth * 5.2) : 0f;
+            float chromaOffset = refractRow ? (float)(depth * 1.65) : 0f;
+            float baseSine = refractRow ? (float)Math.Sin(y * 0.16 - tSec * 4.4) * 0.55f : 0f;
+
+            for (int x = xStart, idx = rowOffset + (xStart << 2); x <= xEnd; x++, idx += 4)
             {
                 int sb, sg, sr, sa;
-                if (!rippleRow)
+                if (!refractRow)
                 {
                     int rawA = digitPixels[idx + 3];
                     if (rawA == 0) continue;
@@ -553,18 +628,33 @@ internal sealed class ClockRenderer : IDisposable
                 }
                 else
                 {
-                    // 3-tap horizontal liquid blur + wave refraction
-                    float cx = (float)(x + waveShift);
-                    int b0, g0, r0, a0, b1, g1, r1, a1, b2, g2, r2, a2;
-                    SampleRowLinear(rowOffset, w, cx - bokehSpread, out b0, out g0, out r0, out a0);
-                    SampleRowLinear(rowOffset, w, cx, out b1, out g1, out r1, out a1);
-                    SampleRowLinear(rowOffset, w, cx + bokehSpread, out b2, out g2, out r2, out a2);
+                    // High-compute 2D fluid displacement + 5-tap bokeh blur + optical RGB chromatic dispersion
+                    float n1 = EffectProcedural.SampleFbm(x * 0.14f + tSec * 1.8f, y * 0.18f - tSec * 3.4f) - 0.5f;
+                    float cx = x + (baseSine + n1 * 1.45f) * dispStrength;
 
-                    int rawA = (a0 + (a1 << 1) + a2 + 2) >> 2;
+                    int b0, g0, r0, a0, b1, g1, r1, a1, b2, g2, r2, a2, b3, g3, r3, a3, b4, g4, r4, a4;
+                    SampleRowLinear(rowOffset, w, cx - bokehSpread * 1.6f, out b0, out g0, out r0, out a0);
+                    SampleRowLinear(rowOffset, w, cx - bokehSpread * 0.8f, out b1, out g1, out r1, out a1);
+                    SampleRowLinear(rowOffset, w, cx, out b2, out g2, out r2, out a2);
+                    SampleRowLinear(rowOffset, w, cx + bokehSpread * 0.8f, out b3, out g3, out r3, out a3);
+                    SampleRowLinear(rowOffset, w, cx + bokehSpread * 1.6f, out b4, out g4, out r4, out a4);
+
+                    int rawA = (a0 + (a1 << 2) + (a2 * 6) + (a3 << 2) + a4 + 8) >> 4;
                     if (rawA == 0) continue;
-                    int rawB = (b0 + (b1 << 1) + b2 + 2) >> 2;
-                    int rawG = (g0 + (g1 << 1) + g2 + 2) >> 2;
-                    int rawR = (r0 + (r1 << 1) + r2 + 2) >> 2;
+
+                    // Subtle chromatic dispersion: red shifts slightly left, blue shifts slightly right through water
+                    int rDisp, gDisp, bDisp, aDummy;
+                    SampleRowLinear(rowOffset, w, cx - chromaOffset, out bDisp, out gDisp, out rDisp, out aDummy);
+                    int rRight, gRight, bRight;
+                    SampleRowLinear(rowOffset, w, cx + chromaOffset, out bRight, out gRight, out rRight, out aDummy);
+
+                    int blurB = (b0 + (b1 << 2) + (b2 * 6) + (b3 << 2) + b4 + 8) >> 4;
+                    int blurG = (g0 + (g1 << 2) + (g2 * 6) + (g3 << 2) + g4 + 8) >> 4;
+                    int blurR = (r0 + (r1 << 2) + (r2 * 6) + (r3 << 2) + r4 + 8) >> 4;
+
+                    int rawR = (blurR * 3 + rDisp) >> 2;
+                    int rawG = blurG;
+                    int rawB = (blurB * 3 + bRight) >> 2;
 
                     sb = (rawB * m + 127) / 255;
                     sg = (rawG * m + 127) / 255;
@@ -623,11 +713,120 @@ internal sealed class ClockRenderer : IDisposable
         a = (a0 * inv + a1 * t) >> 8;
     }
 
+    private void EnsureGlyphBitmapCache(Color primary, Color seconds, bool dropShadow)
+    {
+        if (cachedPrimaryGlyphs != null &&
+            cachedPrimaryInk.ToArgb() == primary.ToArgb() &&
+            cachedSecondsInk.ToArgb() == seconds.ToArgb() &&
+            cachedGlyphShadow == dropShadow)
+            return;
+
+        DisposeGlyphCache();
+        cachedPrimaryInk = primary;
+        cachedSecondsInk = seconds;
+        cachedGlyphShadow = dropShadow;
+
+        glyphPadX = (int)Math.Ceiling(digitWidth * 0.68f) + 6;
+        glyphPadY = (int)Math.Ceiling(digitHeight * 0.68f) + 8;
+        glyphBmpW = glyphPadX * 2;
+        glyphBmpH = glyphPadY * 2;
+
+        cachedPrimaryGlyphs = new Bitmap[10];
+        cachedSecondsGlyphs = new Bitmap[10];
+        for (int i = 0; i < 10; i++)
+        {
+            cachedPrimaryGlyphs[i] = RasterizeGlyphBitmap(glyphs[i], primary, dropShadow);
+            cachedSecondsGlyphs[i] = RasterizeGlyphBitmap(glyphs[i], seconds, dropShadow);
+        }
+    }
+
+    private Bitmap RasterizeGlyphBitmap(GraphicsPath path, Color color, bool dropShadow)
+    {
+        Bitmap bmp = new Bitmap(glyphBmpW, glyphBmpH, PixelFormat.Format32bppPArgb);
+        using (Graphics g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.Transparent);
+            g.SmoothingMode = SmoothingMode.HighQuality;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            if (dropShadow)
+            {
+                GraphicsState s = g.Save();
+                g.TranslateTransform(glyphPadX, glyphPadY + 3.5f);
+                using (SolidBrush shadowBrush = new SolidBrush(Color.FromArgb(105, 8, 12, 20)))
+                    g.FillPath(shadowBrush, path);
+                g.Restore(s);
+            }
+            g.TranslateTransform(glyphPadX, glyphPadY);
+            if (!dropShadow && theme != ClockTheme.PorcelainLight)
+            {
+                using (Pen glowPen = new Pen(Color.FromArgb(30, color.R, color.G, color.B), 2.8f))
+                {
+                    glowPen.LineJoin = LineJoin.Round;
+                    g.DrawPath(glowPen, path);
+                }
+            }
+            using (SolidBrush fill = new SolidBrush(color))
+                g.FillPath(fill, path);
+        }
+        return bmp;
+    }
+
+    private void DisposeGlyphCache()
+    {
+        if (cachedPrimaryGlyphs != null)
+        {
+            foreach (Bitmap b in cachedPrimaryGlyphs) if (b != null) b.Dispose();
+            cachedPrimaryGlyphs = null;
+        }
+        if (cachedSecondsGlyphs != null)
+        {
+            foreach (Bitmap b in cachedSecondsGlyphs) if (b != null) b.Dispose();
+            cachedSecondsGlyphs = null;
+        }
+    }
+
     private void PaintDigit(Graphics g, char ch, float x, float y, float scaleX, float scaleY,
         Color color, float opacity, bool dropShadow, float shimmerProgress)
     {
         if (opacity <= 0.004f || ch < '0' || ch > '9') return;
-        GraphicsPath path = glyphs[ch - '0'];
+        int dIdx = ch - '0';
+
+        // Fast path: blit pre-rasterized anti-aliased glyph bitmap (~150x faster than FillPath on handwritten paths!)
+        if (shimmerProgress < 0f || shimmerProgress > 1f)
+        {
+            EnsureGlyphBitmapCache(GetPrimaryDigitColor(), GetSecondsDigitColor(), dropShadow);
+            Bitmap bmp = (color.ToArgb() == cachedSecondsInk.ToArgb())
+                ? cachedSecondsGlyphs[dIdx]
+                : cachedPrimaryGlyphs[dIdx];
+
+            float dw = glyphBmpW * scaleX;
+            float dh = glyphBmpH * scaleY;
+            RectangleF dest = new RectangleF(x - dw * 0.5f, y - dh * 0.5f, dw, dh);
+
+            if (opacity >= 0.995f)
+            {
+                g.InterpolationMode = InterpolationMode.Bilinear;
+                g.DrawImage(bmp, dest);
+            }
+            else
+            {
+                using (ImageAttributes ia = new ImageAttributes())
+                {
+                    ColorMatrix cm = new ColorMatrix { Matrix33 = opacity };
+                    ia.SetColorMatrix(cm, ColorMatrixFlag.Default, ColorAdjustType.Bitmap);
+                    g.InterpolationMode = InterpolationMode.Bilinear;
+                    g.DrawImage(bmp, new[]
+                    {
+                        new PointF(dest.Left, dest.Top),
+                        new PointF(dest.Right, dest.Top),
+                        new PointF(dest.Left, dest.Bottom)
+                    }, new RectangleF(0, 0, glyphBmpW, glyphBmpH), GraphicsUnit.Pixel, ia);
+                }
+            }
+            return;
+        }
+
+        GraphicsPath path = glyphs[dIdx];
         int alpha = Math.Max(0, Math.Min(255, (int)Math.Round(color.A * opacity)));
         if (alpha == 0) return;
 
@@ -954,6 +1153,9 @@ internal sealed class ClockRenderer : IDisposable
                 double g = Math.Min(255.0, wp.G * (1.0 - veilMix) + veilG * veilMix + sheen);
                 double b = Math.Min(255.0, wp.B * (1.0 - veilMix) + veilB * veilMix + sheen * 1.1);
 
+                // Overlay dedicated high-realism material surface for the active effect
+                EffectProcedural.ApplySceneSurfacePixel(flowStyle, theme, x, y, cardRect, ref r, ref g, ref b);
+
                 int sa = (int)Math.Round(cov * cardAlpha);
                 int sr = (int)Math.Round(r * sa / 255.0);
                 int sg = (int)Math.Round(g * sa / 255.0);
@@ -981,16 +1183,21 @@ internal sealed class ClockRenderer : IDisposable
                 {
                     g.SetClip(clipPath);
 
-                    float bandTop = centerY - rowHeight * 0.50f;
-                    RectangleF bandRect = new RectangleF(cardRect.Left, bandTop, cardRect.Width, rowHeight);
-                    Color bandTint = theme == ClockTheme.PorcelainLight
-                        ? Color.FromArgb(10, 15, 23, 42)
-                        : Color.FromArgb(12, 255, 255, 255);
-                    using (SolidBrush bandBrush = new SolidBrush(bandTint))
-                        g.FillRectangle(bandBrush, bandRect);
+                    EffectProcedural.DrawSceneCardDetails(g, flowStyle, theme, cardRect, cornerRadius, centerY, rowHeight);
 
-                    DrawFadingHairline(g, cardRect.Left + 18f, cardRect.Right - 18f, bandTop);
-                    DrawFadingHairline(g, cardRect.Left + 18f, cardRect.Right - 18f, bandTop + rowHeight);
+                    if (flowStyle != ClockFlowStyle.SplitFlap)
+                    {
+                        float bandTop = centerY - rowHeight * 0.50f;
+                        RectangleF bandRect = new RectangleF(cardRect.Left, bandTop, cardRect.Width, rowHeight);
+                        Color bandTint = theme == ClockTheme.PorcelainLight
+                            ? Color.FromArgb(10, 15, 23, 42)
+                            : Color.FromArgb(12, 255, 255, 255);
+                        using (SolidBrush bandBrush = new SolidBrush(bandTint))
+                            g.FillRectangle(bandBrush, bandRect);
+
+                        DrawFadingHairline(g, cardRect.Left + 18f, cardRect.Right - 18f, bandTop);
+                        DrawFadingHairline(g, cardRect.Left + 18f, cardRect.Right - 18f, bandTop + rowHeight);
+                    }
 
                     g.ResetClip();
 
@@ -1056,7 +1263,11 @@ internal sealed class ClockRenderer : IDisposable
 
     public void Dispose()
     {
+        DisposeGlyphCache();
         if (captionFont != null) captionFont.Dispose();
+        if (emberOldBmp != null) emberOldBmp.Dispose();
+        if (emberNewBmp != null) emberNewBmp.Dispose();
+        if (emberOutBmp != null) emberOutBmp.Dispose();
         digitLayer.Dispose();
         foreach (GraphicsPath path in glyphs)
             if (path != null) path.Dispose();

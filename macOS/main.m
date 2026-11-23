@@ -6,6 +6,18 @@
 #import "InkSampler.h"
 #import "LoginItem.h"
 
+@interface CountdownModeControl : NSSegmentedControl
+@property(nonatomic,weak) NSView *durationFields;
+@property(nonatomic,weak) NSView *targetFields;
+- (void)showSelectedFields:(id)sender;
+@end
+@implementation CountdownModeControl
+- (void)showSelectedFields:(id)sender {
+    self.durationFields.hidden=self.selectedSegment==1;
+    self.targetFields.hidden=self.selectedSegment!=1;
+}
+@end
+
 @interface ClockController : NSObject <NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate>
 @end
 @implementation ClockController {
@@ -19,6 +31,14 @@
     NSMenu *_menu;
     NSTimer *_displayTimer;
     NSTimer *_sampleTimer;
+    time_t _lastRenderedSecond;
+}
+
+static NSInteger NormalizeFlow(NSInteger raw) {
+    if (raw == 4) return 1;
+    if (raw == 5) return 2;
+    if (raw == 6) return 3;
+    return (raw >= 0 && raw <= 3) ? raw : 0;
 }
 
 - (NSMenuItem *)item:(NSString *)title key:(NSString *)key value:(NSInteger)value menu:(NSMenu *)menu {
@@ -73,7 +93,7 @@
     [self item:@"返回时钟" key:@"clock" value:0 menu:_menu];
     [_menu addItem:NSMenuItem.separatorItem];
     [self choices:@"外观" key:@"theme" labels:@[@"液态磨砂",@"纯净悬浮",@"极简白瓷",@"深海幽蓝"]];
-    [self choices:@"流动效果" key:@"flow" labels:@[@"水波溪流",@"精密滚轮",@"静谧水影",@"纯净极简"]];
+    [self choices:@"数字特效" key:@"flow" labels:@[@"水波溪流",@"余烬燃烧",@"冰裂碎片",@"翻页记分牌"]];
     [self choices:@"大小" key:@"scale" labels:@[@"小",@"标准",@"大"]];
     [self item:@"选择系统字体…" key:@"chooseFont" value:0 menu:_menu];
     [self item:@"内置手写字体" key:@"builtin" value:0 menu:_menu];
@@ -98,11 +118,22 @@
         if (NSPointInRect(NSMakePoint(NSMidX(_window.frame),NSMidY(_window.frame)),screen.visibleFrame)) visible=YES;
     if (!position || !visible) [self resetPosition];
     [_window orderFrontRegardless];
-    _displayTimer = [NSTimer timerWithTimeInterval:1.0/40 repeats:YES block:^(NSTimer *t){ [self->_view setNeedsDisplay:YES]; }];
+    _lastRenderedSecond = -1;
+    _displayTimer = [NSTimer timerWithTimeInterval:1.0/33.0 repeats:YES block:^(NSTimer *t){
+        NSTimeInterval wall=self->_view.wallTime;
+        time_t sec=self->_view.countdown ? [self->_view.countdown remainingAt:wall] : (time_t)floor(wall);
+        if (self->_view.isAnimating || sec != self->_lastRenderedSecond) {
+            self->_lastRenderedSecond = sec;
+            [self->_view setNeedsDisplay:YES];
+        }
+    }];
     [NSRunLoop.mainRunLoop addTimer:_displayTimer forMode:NSRunLoopCommonModes];
     _sampleTimer = [NSTimer scheduledTimerWithTimeInterval:0.8 repeats:YES block:^(NSTimer *t){
         if (self->_view.autoColor) [self->_sampler updateView:self->_view];
     }];
+}
+- (void)applicationWillTerminate:(NSNotification *)note {
+    [_displayTimer invalidate]; [_sampleTimer invalidate];
 }
 - (void)resetPosition {
     NSRect screen = NSScreen.screens.firstObject.visibleFrame;
@@ -110,8 +141,11 @@
 }
 - (void)applySettings {
     _view.fontName = [_prefs stringForKey:@"font"]; _view.twelve = [_prefs boolForKey:@"twelve"];
-    _view.flow = [_prefs integerForKey:@"flow"]; _view.scale = [_prefs integerForKey:@"scale"];
+    NSInteger flow = NormalizeFlow([_prefs integerForKey:@"flow"]);
+    if (flow != [_prefs integerForKey:@"flow"]) [_prefs setInteger:flow forKey:@"flow"];
+    _view.flow = flow; _view.scale = [_prefs integerForKey:@"scale"];
     _view.theme = [_prefs integerForKey:@"theme"]; _view.autoColor = [_prefs boolForKey:@"auto"];
+    _lastRenderedSecond = -1;
     NSSize wanted = [self preferredSize];
     NSRect frame = _window.frame;
     if (!NSEqualSizes(frame.size,wanted))
@@ -132,39 +166,66 @@
 - (void)configureCountdown {
     NSAlert *dialog=[NSAlert new];
     dialog.messageText=@"设置倒计时";
-    dialog.informativeText=@"输入名称和时长，最长 99 小时 59 分 59 秒。";
+    dialog.informativeText=@"填写名称，选择倒计时方式。";
     [dialog addButtonWithTitle:@"开始"]; [dialog addButtonWithTitle:@"取消"];
-    NSView *form=[[NSView alloc] initWithFrame:NSMakeRect(0,0,306,96)];
-    NSTextField *name=[[NSTextField alloc] initWithFrame:NSMakeRect(0,66,306,24)];
+    NSView *form=[[NSView alloc] initWithFrame:NSMakeRect(0,0,342,138)];
+    NSTextField *name=[[NSTextField alloc] initWithFrame:NSMakeRect(0,110,342,24)];
     name.placeholderString=@"倒计时名称"; name.stringValue=_countdown.name ?: @"";
     [name setAccessibilityLabel:@"倒计时名称"]; [form addSubview:name];
-    NSInteger duration=_countdown ? _countdown.duration : 300;
+    CountdownModeControl *mode=[[CountdownModeControl alloc] initWithFrame:NSMakeRect(0,70,342,28)];
+    mode.segmentCount=2; [mode setLabel:@"指定时长" forSegment:0]; [mode setLabel:@"到指定时间" forSegment:1];
+    mode.target=mode; mode.action=@selector(showSelectedFields:); mode.selectedSegment=_countdown.usesTargetTime?1:0;
+    [form addSubview:mode]; name.nextKeyView=mode;
+    NSView *durationFields=[[NSView alloc] initWithFrame:NSMakeRect(0,0,342,60)];
+    NSView *targetFields=[[NSView alloc] initWithFrame:durationFields.frame];
+    [form addSubview:durationFields]; [form addSubview:targetFields];
+    mode.durationFields=durationFields; mode.targetFields=targetFields;
+    NSInteger duration=_countdown && !_countdown.usesTargetTime ? _countdown.duration :
+        [_prefs integerForKey:@"lastCountdownDuration"];
+    if (duration<1 || duration>359999) duration=300;
     NSArray *labels=@[@"小时",@"分钟",@"秒"];
     NSArray *defaults=@[@(duration/3600),@(duration/60%60),@(duration%60)];
     NSMutableArray<NSTextField *> *fields=[NSMutableArray array];
-    NSView *previous=name;
+    NSView *previous=mode;
     for (NSInteger i=0;i<3;i++) {
         NSTextField *field=[[NSTextField alloc] initWithFrame:NSMakeRect(i*104,7,92,24)];
         field.stringValue=[defaults[i] stringValue]; [field setAccessibilityLabel:labels[i]];
         NSTextField *label=[NSTextField labelWithString:labels[i]];
         label.frame=NSMakeRect(i*104,33,92,18);
-        [form addSubview:label]; [form addSubview:field]; [fields addObject:field];
+        [durationFields addSubview:label]; [durationFields addSubview:field]; [fields addObject:field];
         previous.nextKeyView=field; previous=field;
     }
-    previous.nextKeyView=name;
+    NSTextField *targetLabel=[NSTextField labelWithString:@"本地日期和时间"];
+    targetLabel.frame=NSMakeRect(0,33,342,18); [targetFields addSubview:targetLabel];
+    NSDatePicker *target=[[NSDatePicker alloc] initWithFrame:NSMakeRect(0,5,342,26)];
+    target.datePickerStyle=NSTextFieldAndStepperDatePickerStyle;
+    target.datePickerElements=NSYearMonthDayDatePickerElementFlag | NSHourMinuteSecondDatePickerElementFlag;
+    target.timeZone=NSTimeZone.localTimeZone;
+    NSTimeInterval defaultDate=_countdown.usesTargetTime ? _countdown.deadline : ceil(NSDate.date.timeIntervalSince1970)+300;
+    target.dateValue=[NSDate dateWithTimeIntervalSince1970:defaultDate];
+    [target setAccessibilityLabel:@"本地目标日期、小时、分钟和秒"]; [targetFields addSubview:target];
+    previous.nextKeyView=target; target.nextKeyView=name;
+    [mode showSelectedFields:nil];
     dialog.accessoryView=form;
     dialog.window.initialFirstResponder=name;
     [NSApp activateIgnoringOtherApps:YES];
     while ([dialog runModal]==NSAlertFirstButtonReturn) {
-        ClockCountdown *entry=[ClockCountdown countdownNamed:name.stringValue hours:fields[0].stringValue
-            minutes:fields[1].stringValue seconds:fields[2].stringValue startingAt:NSDate.date.timeIntervalSince1970];
+        NSTimeInterval now=NSDate.date.timeIntervalSince1970;
+        BOOL useTarget=mode.selectedSegment==1;
+        ClockCountdown *entry=useTarget
+            ? [ClockCountdown countdownNamed:name.stringValue endingAt:floor(target.dateValue.timeIntervalSince1970) startingAt:now]
+            : [ClockCountdown countdownNamed:name.stringValue hours:fields[0].stringValue
+                minutes:fields[1].stringValue seconds:fields[2].stringValue startingAt:now];
         if (entry) {
+            if (!_countdown.usesTargetTime && _countdown) [_prefs setInteger:_countdown.duration forKey:@"lastCountdownDuration"];
+            if (!entry.usesTargetTime) [_prefs setInteger:entry.duration forKey:@"lastCountdownDuration"];
             [_prefs setObject:entry.record forKey:@"countdown"];
             [_prefs setBool:NO forKey:@"showClockInstead"];
             _countdown=entry; _view.countdown=entry;
             break;
         }
-        dialog.informativeText=@"请填写名称。小时为 0–99，分钟和秒为 0–59，总时长须大于零。";
+        dialog.informativeText=useTarget ? @"请填写名称，并选择晚于当前时间的日期和时间。" :
+            @"请填写名称。小时为 0–99，分钟和秒为 0–59，总时长须大于零。";
     }
 }
 - (void)menuNeedsUpdate:(NSMenu *)menu {
@@ -177,7 +238,8 @@
         }
         BOOL on = NO;
         if ([key isEqual:@"scale"]) on = fabs(_window.frame.size.width-[ClockView sizeForScale:item.tag].width)<1;
-        else if ([@[@"theme",@"flow"] containsObject:key]) on = [_prefs integerForKey:key] == item.tag;
+        else if ([key isEqual:@"theme"]) on = [_prefs integerForKey:key] == item.tag;
+        else if ([key isEqual:@"flow"]) on = NormalizeFlow([_prefs integerForKey:key]) == item.tag;
         else if ([@[@"top",@"auto",@"twelve"] containsObject:key]) on = [_prefs boolForKey:key];
         else if ([key isEqual:@"builtin"]) on = [[_prefs stringForKey:@"font"] isEqual:@"随性手写（内置）"];
         else if ([key isEqual:@"login"]) on = SMAppService.mainAppService.status == SMAppServiceStatusEnabled;

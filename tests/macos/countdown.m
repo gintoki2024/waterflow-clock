@@ -6,8 +6,9 @@ static BOOL renderedBands(CGFloat width, NSInteger theme, NSInteger flow, BOOL e
     ClockView *view=[[ClockView alloc] initWithFrame:NSMakeRect(0,0,size.width,size.height)];
     view.theme=theme; view.flow=flow; view.twelve=YES;
     view.fontName=theme%2 ? @"Helvetica" : @"随性手写（内置）";
-    view.countdown=[ClockCountdown countdownNamed:@"跨天倒计时 · 测试名称" hours:@"25" minutes:@"00" seconds:@"01"
-        startingAt:NSDate.date.timeIntervalSince1970-(expired?100000:0)];
+    NSTimeInterval start=NSDate.date.timeIntervalSince1970-(expired?800000:0);
+    view.countdown=theme%2 ? [ClockCountdown countdownNamed:@"跨天目标 · 测试名称" endingAt:start+719999 startingAt:start] :
+        [ClockCountdown countdownNamed:@"跨天倒计时 · 测试名称" hours:@"25" minutes:@"00" seconds:@"01" startingAt:start];
     NSBitmapImageRep *rep=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
         pixelsWide:ceil(size.width) pixelsHigh:ceil(size.height) bitsPerSample:8 samplesPerPixel:4
         hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:32];
@@ -42,6 +43,23 @@ int main(void) {
             options:0 format:NULL error:NULL]];
         if (![restored.name isEqual:timer.name] || [restored remainingAt:now+90000]!=269999 ||
             [restored remainingAt:now+360000]!=0) return 2;
+        NSMutableDictionary *legacy=[timer.record mutableCopy];
+        [legacy removeObjectForKey:@"mode"];
+        ClockCountdown *old=[ClockCountdown fromRecord:legacy];
+        if (!old || old.usesTargetTime || [old remainingAt:now]!=359999) return 5;
+        ClockCountdown *target=[ClockCountdown countdownNamed:@"交付" endingAt:now+400*86400+2 startingAt:now];
+        ClockCountdown *loaded=[ClockCountdown fromRecord:target.record];
+        if (!loaded.usesTargetTime || loaded.deadline!=target.deadline ||
+            ![[loaded captionForRemaining:[loaded remainingAt:now]] isEqual:@"400 天 · 交付"] ||
+            [loaded remainingAt:now-5]!=400*86400+7 ||
+            [loaded remainingAt:loaded.deadline+.1]!=0 ||
+            [ClockCountdown countdownNamed:@"A" endingAt:now startingAt:now] ||
+            [ClockCountdown countdownNamed:@"A" endingAt:now-1 startingAt:now] ||
+            [ClockCountdown countdownNamed:@" " endingAt:now+1 startingAt:now]) return 6;
+        if (![[target captionForRemaining:360000] isEqual:@"4 天 · 交付"] ||
+            [ClockCountdown displayHoursForRemaining:360000]!=4 ||
+            ![[target captionForRemaining:359999] isEqual:@"交付"] ||
+            [ClockCountdown displayHoursForRemaining:359999]!=99) return 7;
         for (NSArray *row in @[@[@" ",@"1",@"0",@"0"],@[@"A",@"0",@"0",@"0"],@[@"A",@"100",@"0",@"0"],
                              @[@"A",@"0",@"60",@"0"],@[@"A",@"0",@"0",@"60"],@[@"A",@"x",@"0",@"1"]])
             if ([ClockCountdown countdownNamed:row[0] hours:row[1] minutes:row[2] seconds:row[3] startingAt:now]) return 3;
@@ -51,7 +69,7 @@ int main(void) {
                 return 4;
             }
         }
-        puts("Countdown input bounds, maximum duration, subsecond rounding, restart, expiration and rendered labels passed");
+        puts("Duration and target dates, legacy records, 100-hour caption boundary, subsecond rounding, restart, expiration and rendered labels passed");
     }
     return 0;
 }

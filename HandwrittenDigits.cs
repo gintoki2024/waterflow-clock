@@ -303,7 +303,7 @@ internal static class HandwrittenDigits
         float[] prs = def.Pressures;
         if (pts.Length < 2) return;
 
-        int stepsPerSeg = 18;
+        int stepsPerSeg = 8;
         var centerPts = new List<PointF>();
         var radii = new List<float>();
 
@@ -353,7 +353,6 @@ internal static class HandwrittenDigits
             {
                 float nx = -dy / len;
                 float ny = dx / len;
-                // Strictly clockwise convex quad in screen coords (Y-down): a+n -> b+n -> b-n -> a-n
                 PointF[] quad =
                 {
                     new PointF(a.X + nx * ra, a.Y + ny * ra),
@@ -363,7 +362,8 @@ internal static class HandwrittenDigits
                 };
                 target.AddPolygon(quad);
             }
-            AddDisc(target, b, rb);
+            if ((i & 1) == 1 || i == n - 2)
+                AddDisc(target, b, rb);
         }
     }
 

@@ -59,7 +59,7 @@ int main(void) {
         panel.opaque = NO;
         panel.backgroundColor = NSColor.clearColor;
         ClockView *view = [[ClockView alloc] initWithFrame:NSMakeRect(0,0,400,208)];
-        view.theme=1; view.flow=3; view.autoColor=YES;
+        view.theme=1; view.flow=0; view.autoColor=YES;
         panel.contentView=view;
         [panel orderFrontRegardless];
         InkSampler *sampler=[InkSampler new];

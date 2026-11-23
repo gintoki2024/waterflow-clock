@@ -74,19 +74,3 @@ jobs:
           name: notarized-dmg
           path: ${{ runner.temp }}/WaterflowClock-macOS.dmg
           if-no-files-found: error
-  publish:
-    needs: notarize
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: notarized-dmg
-      - name: Replace the verified DMG on the existing release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload v1.1.0 WaterflowClock-macOS.dmg --repo "$GITHUB_REPOSITORY" --clobber
-          digest="$(gh release view v1.1.0 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[]|select(.name=="WaterflowClock-macOS.dmg")|.digest')"
-          test "$digest" = "sha256:$(sha256sum WaterflowClock-macOS.dmg | cut -d' ' -f1)"

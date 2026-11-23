@@ -24,9 +24,9 @@ public enum ClockScale
 public enum ClockFlowStyle
 {
     LiquidStream = 0,
-    PrecisionCylinder = 1,
-    CalmRipple = 2,
-    MinimalGlide = 3
+    EmberBurn = 1,
+    IceShards = 2,
+    SplitFlap = 3
 }
 
 public class Options
@@ -67,7 +67,10 @@ public class Options
                 if (scale >= 0 && scale <= 2) options.Scale = (ClockScale)scale;
                 options.Zoom = ClampZoom(ReadNumber(key, "Zoom", 10000));
                 int flow = ReadNumber(key, "FlowStyle", (int)ClockFlowStyle.LiquidStream);
-                if (flow >= 0 && flow <= 3) options.FlowStyle = (ClockFlowStyle)flow;
+                if (flow == 4) options.FlowStyle = ClockFlowStyle.EmberBurn;
+                else if (flow == 5) options.FlowStyle = ClockFlowStyle.IceShards;
+                else if (flow == 6) options.FlowStyle = ClockFlowStyle.SplitFlap;
+                else if (Enum.IsDefined(typeof(ClockFlowStyle), flow)) options.FlowStyle = (ClockFlowStyle)flow;
                 options.X = ReadNumber(key, "X", int.MinValue);
                 options.Y = ReadNumber(key, "Y", int.MinValue);
             }
@@ -125,11 +128,11 @@ public class Options
     {
         switch (style)
         {
-            case ClockFlowStyle.LiquidStream: return "水波溪流（连续秒流 + 折射 + 连锁 + 微光）";
-            case ClockFlowStyle.PrecisionCylinder: return "精密滚轮（3D 透视 + 轻弹 + 连锁 + 微光）";
-            case ClockFlowStyle.CalmRipple: return "静谧水影（步进 + 液面折射虚化 + 连锁）";
-            case ClockFlowStyle.MinimalGlide: return "纯净极简（平滑渐隐 + 波浪连锁）";
-            default: return "水波溪流（连续秒流 + 折射 + 连锁 + 微光）";
+            case ClockFlowStyle.LiquidStream: return "水波溪流（水下焦散 + 2D折射色散）";
+            case ClockFlowStyle.EmberBurn: return "余烬燃烧（噪声侵蚀 + 黑体火焰 + 炭火底纹）";
+            case ClockFlowStyle.IceShards: return "冰裂碎片（3D晶体翻滚 + 霜花底板）";
+            case ClockFlowStyle.SplitFlap: return "翻页记分牌（3D透视翻折 + 机械铝箱）";
+            default: return "水波溪流（水下焦散 + 2D折射色散）";
         }
     }
 }
@@ -173,7 +176,7 @@ public sealed class OptionsDialog : Form
 
         Label header = new Label
         {
-            Text = "外观与流动动效",
+            Text = "外观与数字特效",
             Font = CreateUiFont(13f, FontStyle.Bold),
             ForeColor = TextPrimary,
             AutoSize = true,
@@ -206,15 +209,10 @@ public sealed class OptionsDialog : Form
         themeBox.SelectedIndex = (int)options.Theme;
 
         y += rowStep;
-        Label flowLabel = MakeLabel("流动风格", labelX, y + 4);
+        Label flowLabel = MakeLabel("数字特效", labelX, y + 4);
         StyleCombo(flowBox, fieldX, y, fieldW);
-        flowBox.Items.AddRange(new object[]
-        {
-            Options.GetFlowStyleDisplayName(ClockFlowStyle.LiquidStream),
-            Options.GetFlowStyleDisplayName(ClockFlowStyle.PrecisionCylinder),
-            Options.GetFlowStyleDisplayName(ClockFlowStyle.CalmRipple),
-            Options.GetFlowStyleDisplayName(ClockFlowStyle.MinimalGlide)
-        });
+        foreach (ClockFlowStyle style in Enum.GetValues(typeof(ClockFlowStyle)))
+            flowBox.Items.Add(Options.GetFlowStyleDisplayName(style));
         flowBox.SelectedIndex = (int)options.FlowStyle;
 
         y += rowStep;

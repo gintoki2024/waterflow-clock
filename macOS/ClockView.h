@@ -10,8 +10,11 @@
 @property(nonatomic) NSInteger scale;
 @property(nonatomic, copy) NSString *fontName;
 @property(nonatomic, strong) ClockCountdown *countdown;
+@property(nonatomic, readonly) BOOL isAnimating;
 + (NSSize)sizeForScale:(NSInteger)scale;
 + (NSSize)sizeForWidth:(CGFloat)width;
+- (NSTimeInterval)wallTime;
+- (NSTimeInterval)animationTime;
 @end
 
 @interface ClockResizeHandle : NSView
