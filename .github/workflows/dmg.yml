@@ -1,0 +1,59 @@
+name: Package macOS release DMG
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+        default: v1.1.0
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 10
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify the released ZIP and create a read-only disk image
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern WaterflowClock-macOS.zip
+          expected=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name=="WaterflowClock-macOS.zip") | .digest')
+          test "$expected" = "sha256:$(shasum -a 256 WaterflowClock-macOS.zip | cut -d' ' -f1)"
+          mkdir payload
+          ditto -x -k WaterflowClock-macOS.zip payload
+          app="payload/水流时钟.app"
+          test "$(defaults read "$PWD/$app/Contents/Info" CFBundleShortVersionString)" = "${TAG#v}"
+          codesign --verify --deep --strict --all-architectures "$app"
+          ln -s /Applications payload/Applications
+          hdiutil create -volname "水流时钟" -fs HFS+ -format UDZO -srcfolder payload WaterflowClock-macOS.dmg
+      - name: Mount, install via the Applications link, and launch
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          hdiutil verify WaterflowClock-macOS.dmg
+          mkdir mount
+          hdiutil attach -readonly -nobrowse -mountpoint "$PWD/mount" WaterflowClock-macOS.dmg
+          trap 'hdiutil detach "$PWD/mount"' EXIT
+          test -L mount/Applications
+          test "$(readlink mount/Applications)" = /Applications
+          test ! -e "/Applications/水流时钟.app"
+          sudo ditto "mount/水流时钟.app" "mount/Applications/水流时钟.app"
+          installed="/Applications/水流时钟.app"
+          codesign --verify --deep --strict --all-architectures "$installed"
+          exe="$installed/Contents/MacOS/WaterClock"
+          cmp "$exe" "payload/水流时钟.app/Contents/MacOS/WaterClock"
+          lipo "$exe" -verify_arch arm64 x86_64
+          "$exe" &
+          pid=$!
+          sleep 4
+          kill -0 "$pid"
+          kill "$pid"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-dmg
+          path: ${{ runner.temp }}/WaterflowClock-macOS.dmg
+          if-no-files-found: error
