@@ -62,6 +62,13 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
 }
 - (BOOL)isOpaque { return NO; }
 - (BOOL)mouseDownCanMoveWindow { return YES; }
+- (void)setCountdown:(ClockCountdown *)countdown {
+    if (_countdown == countdown) return;
+    _countdown=countdown;
+    _started=NO;
+    self.toolTip=countdown.name;
+    [self setNeedsDisplay:YES];
+}
 
 - (void)prepareGlyphs {
     NSString *name = self.fontName.length ? self.fontName : @"随性手写（内置）";
@@ -115,16 +122,26 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
     CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
     CGContextClearRect(ctx,dirtyRect);
     CGFloat unit = MIN(NSWidth(self.bounds)/6.35, NSHeight(self.bounds)/3.30);
-    CGFloat center = NSMidY(self.bounds), x = NSMidX(self.bounds)-unit*2.76;
+    BOOL counting = self.countdown!=nil;
+    if (counting) unit *= .88;
+    CGFloat center = NSHeight(self.bounds)*(counting?.42:.50), x = NSMidX(self.bounds)-unit*2.76;
     NSTimeInterval absolute = NSDate.date.timeIntervalSince1970;
     time_t second = (time_t)floor(absolute);
     double fraction = absolute-floor(absolute);
     double now = NSProcessInfo.processInfo.systemUptime;
-    struct tm local;
-    localtime_r(&second,&local);
-    int hour = local.tm_hour;
-    if (self.twelve) hour = (hour+11)%12+1;
-    int values[] = {hour/10,hour%10,-1,local.tm_min/10,local.tm_min%10,-1,local.tm_sec/10,local.tm_sec%10};
+    int hour,minute,sec;
+    NSInteger remaining=[self.countdown remainingAt:absolute];
+    if (counting) {
+        hour=(int)(remaining/3600); minute=(int)(remaining/60%60); sec=(int)(remaining%60);
+        fraction=MIN(1.,MAX(0.,remaining-(self.countdown.deadline-absolute)));
+    } else {
+        struct tm local;
+        localtime_r(&second,&local);
+        hour = self.twelve ? (local.tm_hour+11)%12+1 : local.tm_hour;
+        minute=local.tm_min; sec=local.tm_sec;
+    }
+    BOOL expired=counting && remaining==0;
+    int values[] = {hour/10,hour%10,-1,minute/10,minute%10,-1,sec/10,sec%10};
     int rank = 0;
     for (int i=7;i>=0;i--) {
         if (values[i]<0) continue;
@@ -143,6 +160,17 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
                           [NSColor colorWithSRGBRed:.96 green:.98 blue:1 alpha:.98];
     NSColor *accent = dark ? [NSColor colorWithSRGBRed:.08 green:.18 blue:.25 alpha:.98] :
                     [NSColor colorWithSRGBRed:self.theme==3?.60:.86 green:.94 blue:1 alpha:.98];
+    if (counting) {
+        NSMutableParagraphStyle *style=[NSMutableParagraphStyle new];
+        style.alignment=NSTextAlignmentCenter; style.lineBreakMode=NSLineBreakByTruncatingTail;
+        CGFloat w=NSWidth(self.bounds), h=NSHeight(self.bounds);
+        NSDictionary *attributes=@{NSFontAttributeName:[NSFont systemFontOfSize:MAX(11.,unit*.35)
+            weight:NSFontWeightSemibold], NSForegroundColorAttributeName:ink, NSParagraphStyleAttributeName:style};
+        [self.countdown.name drawInRect:NSMakeRect(w*.05,h*.76,w*.90,h*.22) withAttributes:attributes];
+        if (expired) [@"时间到" drawInRect:NSMakeRect(w*.15,h*.035,w*.70,h*.24) withAttributes:attributes];
+        CGContextSaveGState(ctx);
+        CGContextClipToRect(ctx,CGRectMake(0,expired?h*.25:0,w,h*(expired?.48:.73)));
+    }
     for (int i=0;i<8;i++) {
         BOOL colon = values[i]<0;
         CGFloat slot = unit*(colon?.36:.80);
@@ -156,18 +184,19 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
             continue;
         }
         [(i>=6 ? accent : ink) setFill];
-        if (self.flow==0 && i==7) {
+        if (self.flow==0 && i==7 && !expired) {
             double p = fraction;
             for (int offset=-1;offset<=2;offset++) {
                 double depth = p-offset;
                 CGFloat fading = MAX(0.,1-pow(fabs(depth)/1.44,1.6));
-                int d = (values[i]+offset+10)%10;
+                if (counting && (remaining-offset<0 || remaining-offset>self.countdown.duration)) continue;
+                int d = (values[i]+(counting?-offset:offset)+10)%10;
                 [self paintDigit:d x:cx+sin(depth*M_PI)*unit*.045 y:center+unit*depth unit:unit
                          depth:depth alpha:fading tilt:(d%2?-.037:.037) context:ctx];
             }
             continue;
         }
-        double t = MIN(1.,MAX(0.,(now-_start[i])/(self.flow==3?.49:.80)));
+        double t = expired ? 1 : MIN(1.,MAX(0.,(now-_start[i])/(self.flow==3?.49:.80)));
         double p = self.flow==1 ? 1-pow(1-t,3) : .5-.5*cos(t*M_PI);
         CGFloat drift = self.flow==0 || self.flow==2 ? unit*.045*sin(p*M_PI*1.5) : 0;
         if (p<1)
@@ -177,6 +206,7 @@ static CGFloat NewTilt(void) { return ((NSInteger)arc4random_uniform(801)-400) *
         [self paintDigit:_digits[i] x:cx-drift*(1-p) y:center-unit*(1-p)+overshoot unit:unit
                    depth:1-p alpha:pow(p,.62) tilt:_tilt[i] context:ctx];
     }
+    if (counting) CGContextRestoreGState(ctx);
 }
 @end
 

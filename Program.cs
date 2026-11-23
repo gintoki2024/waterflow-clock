@@ -39,6 +39,7 @@ internal sealed class ClockWindow : Form
     readonly ToolStripMenuItem[] flowItems = new ToolStripMenuItem[4];
     readonly ToolStripMenuItem topMostItem;
     readonly ToolStripMenuItem autoColorItem;
+    readonly ToolStripMenuItem countdownMode = new ToolStripMenuItem();
     readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
 
     bool dragging;
@@ -65,6 +66,14 @@ internal sealed class ClockWindow : Form
 
         // Build clean context menu with instant theme switching
         menu.Items.Add("偏好设置…", null, delegate { EditOptions(); });
+        menu.Items.Add("设置倒计时…", null, delegate { EditCountdown(); });
+        countdownMode.Click += delegate
+        {
+            Countdown session = options.TimerSession;
+            if (session != null) SetCountdown(session.WithVisibility(!session.Visible));
+        };
+        menu.Items.Add(countdownMode);
+        menu.Items.Add(new ToolStripSeparator());
 
         ToolStripMenuItem themeMenu = new ToolStripMenuItem("切换主题");
         for (int i = 0; i < 4; i++)
@@ -144,6 +153,9 @@ internal sealed class ClockWindow : Form
 
     void SyncMenuChecks()
     {
+        var session = options.TimerSession;
+        countdownMode.Visible = session != null;
+        countdownMode.Text = session != null && session.Visible ? "切回时钟" : "显示已有倒计时";
         for (int i = 0; i < themeItems.Length; i++)
             themeItems[i].Checked = (int)options.Theme == i;
         for (int i = 0; i < flowItems.Length; i++)
@@ -159,6 +171,31 @@ internal sealed class ClockWindow : Form
         options.Save();
         RebuildRenderer();
         SyncMenuChecks();
+    }
+
+    void EditCountdown()
+    {
+        if (editing) return;
+        editing = true;
+        try
+        {
+            using (var dialog = new CountdownDialog(options.TimerSession))
+                if (dialog.ShowDialog(this) == DialogResult.OK) SetCountdown(dialog.Result);
+        }
+        finally { editing = false; }
+    }
+
+    void SetCountdown(Countdown session)
+    {
+        try { options.SaveCountdown(session); }
+        catch (Exception e)
+        {
+            if (!(e is System.IO.IOException || e is System.Security.SecurityException || e is UnauthorizedAccessException)) throw;
+            MessageBox.Show(this, e.Message, "倒计时保存失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        SyncMenuChecks();
+        DrawFrame();
     }
 
     void SwitchFlowStyle(ClockFlowStyle style)
@@ -356,7 +393,10 @@ internal sealed class ClockWindow : Form
     {
         if (!IsHandleCreated || IsDisposed) return;
         bool showGrip = resizing || Bounds.Contains(Cursor.Position);
-        using (var bitmap = renderer.Render(DateTime.Now, options.Twelve, Location, wallpaper))
+        Countdown countdown = options.TimerSession;
+        using (var bitmap = countdown != null && countdown.Visible
+            ? renderer.RenderCountdown(countdown, DateTime.UtcNow, Location, wallpaper)
+            : renderer.Render(DateTime.Now, options.Twelve, Location, wallpaper))
         {
             if (resizing && bitmap.Size != Size)
             {

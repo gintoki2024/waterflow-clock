@@ -35,6 +35,7 @@ public class Options
 
     public string FontName = HandwrittenDigits.BuiltInFontName;
     public bool Twelve;
+    internal Countdown TimerSession { get; private set; }
     public bool TopMost;
     public bool AutoColor = true;
     public ClockTheme Theme = ClockTheme.LiquidGlass;
@@ -57,6 +58,7 @@ public class Options
                 if (!string.IsNullOrEmpty(savedFont))
                     options.FontName = savedFont;
                 options.Twelve = ReadNumber(key, "Twelve", 0) == 1;
+                options.TimerSession = Countdown.Restore(key.GetValue("Countdown") as string[]);
                 options.TopMost = ReadNumber(key, "TopMost", 0) == 1;
                 options.AutoColor = ReadNumber(key, "AutoColor", 1) != 0;
                 int theme = ReadNumber(key, "Theme", (int)ClockTheme.LiquidGlass);
@@ -80,6 +82,14 @@ public class Options
     {
         object value = key.GetValue(name);
         return value is int ? (int)value : fallback;
+    }
+
+    internal void SaveCountdown(Countdown session)
+    {
+        // One registry value commits the name, original duration, visibility and absolute UTC deadline together.
+        using (RegistryKey key = Registry.CurrentUser.CreateSubKey(SettingsPath))
+            key.SetValue("Countdown", session.Store(), RegistryValueKind.MultiString);
+        TimerSession = session;
     }
 
     public void Save()

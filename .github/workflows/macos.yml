@@ -19,8 +19,12 @@ jobs:
         run: bash macOS/build.sh "$RUNNER_TEMP/dist"
       - name: Exercise clock rendering
         run: |
-          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m tests/macos/render.m -o "$RUNNER_TEMP/render-test"
+          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m macOS/ClockCountdown.m tests/macos/render.m -o "$RUNNER_TEMP/render-test"
           "$RUNNER_TEMP/render-test"
+      - name: Verify countdown deadlines, restoration and rendering
+        run: |
+          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m macOS/ClockCountdown.m tests/macos/countdown.m -o "$RUNNER_TEMP/countdown-test"
+          "$RUNNER_TEMP/countdown-test"
       - name: Start packaged application
         run: |
           ditto -x -k "$RUNNER_TEMP/dist/水流时钟-macOS.zip" "$RUNNER_TEMP/unpacked"
@@ -33,7 +37,7 @@ jobs:
           kill -0 "$pid"
       - name: Drag the resize handle
         run: |
-          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m tests/macos/resize.m -o "$RUNNER_TEMP/resize-test"
+          xcrun clang -fobjc-arc -framework Cocoa -framework CoreText -I macOS macOS/ClockView.m macOS/ClockCountdown.m tests/macos/resize.m -o "$RUNNER_TEMP/resize-test"
           "$RUNNER_TEMP/resize-test"
       - name: Register and remove an actual login item
         run: |
@@ -52,7 +56,7 @@ jobs:
       - name: Verify adaptive ink and check live capture availability
         if: always()
         run: |
-          xcrun clang -fobjc-arc -mmacosx-version-min=13.0 -framework Cocoa -framework CoreText -framework CoreGraphics -framework ScreenCaptureKit -I macOS macOS/ClockView.m macOS/InkSampler.m tests/macos/ink.m -o "$RUNNER_TEMP/ink-test"
+          xcrun clang -fobjc-arc -mmacosx-version-min=13.0 -framework Cocoa -framework CoreText -framework CoreGraphics -framework ScreenCaptureKit -I macOS macOS/ClockView.m macOS/ClockCountdown.m macOS/InkSampler.m tests/macos/ink.m -o "$RUNNER_TEMP/ink-test"
           "$RUNNER_TEMP/ink-test"
       - if: matrix.os == 'macos-15'
         uses: actions/upload-artifact@v4

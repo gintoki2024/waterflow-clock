@@ -35,6 +35,8 @@ internal sealed class ClockRenderer : IDisposable
     private int cachedWallpaperVersion = -1;
 
     private readonly Bitmap digitLayer;
+    private Font captionFont;
+    private bool showingCountdown;
 
     public Size Size { get; private set; }
     public Size PresetSize { get; private set; }
@@ -232,9 +234,24 @@ internal sealed class ClockRenderer : IDisposable
 
     public Bitmap Render(DateTime time, bool twelve, Point screenOrigin, Wallpaper wallpaper)
     {
+        return RenderValues(time.ToString(twelve ? "hh:mm:ss" : "HH:mm:ss", CultureInfo.InvariantCulture),
+            time.Millisecond / 1000.0, null, screenOrigin, wallpaper);
+    }
+
+    internal Bitmap RenderCountdown(Countdown session, DateTime utcNow, Point origin, Wallpaper wallpaper)
+    {
+        int seconds = session.Remaining(utcNow);
+        return RenderValues(Countdown.Format(seconds), 0,
+            seconds == 0 ? "时间到 · " + session.Name : session.Name, origin, wallpaper);
+    }
+
+    private Bitmap RenderValues(string value, double fraction, string caption, Point screenOrigin, Wallpaper wallpaper)
+    {
         EnsureBackgroundCache(screenOrigin, wallpaper);
 
-        string value = time.ToString(twelve ? "hh:mm:ss" : "HH:mm:ss", CultureInfo.InvariantCulture);
+        bool countdown = caption != null;
+        bool modeChanged = countdown != showingCountdown;
+        showingCountdown = countdown;
         double now = timer.Elapsed.TotalMilliseconds;
         if (AutoColor) UpdatePalette(screenOrigin, wallpaper, now);
         else hasPalette = false;
@@ -246,7 +263,7 @@ internal sealed class ClockRenderer : IDisposable
             if (index == 2 || index == 5) continue;
             Digit digit = digits[index];
             char targetChar = value[index];
-            if (digit.Value == 0)
+            if (digit.Value == 0 || countdown || modeChanged)
             {
                 digit.Value = targetChar;
                 digit.OldValue = '\0';
@@ -281,7 +298,7 @@ internal sealed class ClockRenderer : IDisposable
             bool enableShimmer = (flowStyle != ClockFlowStyle.MinimalGlide);
 
             // Smooth breathing colon synced to each second
-            double phase = (time.Millisecond / 1000.0) * Math.PI * 2.0;
+            double phase = fraction * Math.PI * 2.0;
             float colonAlpha = (float)(0.52 + 0.43 * (0.5 + 0.5 * Math.Cos(phase)));
 
             for (int index = 0; index < 8; index++)
@@ -296,9 +313,9 @@ internal sealed class ClockRenderer : IDisposable
                 float x = centers[index];
 
                 // Effect #1: Continuous liquid stream on seconds ones-digit in LiquidStream mode
-                if (flowStyle == ClockFlowStyle.LiquidStream && index == 7)
+                if (!countdown && flowStyle == ClockFlowStyle.LiquidStream && index == 7)
                 {
-                    RenderContinuousSecondsStream(g, value[7] - '0', time.Millisecond / 1000.0, x, ink, drawDropShadow);
+                    RenderContinuousSecondsStream(g, value[7] - '0', fraction, x, ink, drawDropShadow);
                     continue;
                 }
 
@@ -372,12 +389,38 @@ internal sealed class ClockRenderer : IDisposable
             BitmapData dstData = frame.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
             try { Marshal.Copy(outputPixels, 0, dstData.Scan0, outputPixels.Length); }
             finally { frame.UnlockBits(dstData); }
+            if (countdown) PaintCaption(frame, caption);
             return frame;
         }
         catch
         {
             frame.Dispose();
             throw;
+        }
+    }
+
+    private void PaintCaption(Bitmap frame, string text)
+    {
+        if (captionFont == null)
+            captionFont = new Font("Microsoft YaHei UI", Math.Max(10f, rowHeight * .30f), FontStyle.Regular, GraphicsUnit.Pixel);
+        var bounds = new RectangleF(cardRect.Left + digitWidth * .25f, centerY - rowHeight * 1.40f,
+            cardRect.Width - digitWidth * .50f, rowHeight * .78f);
+        using (var g = Graphics.FromImage(frame))
+        using (var format = new StringFormat(StringFormatFlags.NoWrap))
+        using (var ink = new SolidBrush(GetPrimaryDigitColor()))
+        {
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            format.Alignment = StringAlignment.Center;
+            format.LineAlignment = StringAlignment.Center;
+            format.Trimming = StringTrimming.EllipsisCharacter;
+            if (theme == ClockTheme.PureFloating)
+            {
+                var shadow = bounds;
+                shadow.Offset(0, Math.Max(1f, rowHeight * .025f));
+                using (var shade = new SolidBrush(Color.FromArgb(120, 8, 12, 20)))
+                    g.DrawString(text, captionFont, shade, shadow, format);
+            }
+            g.DrawString(text, captionFont, ink, bounds, format);
         }
     }
 
@@ -1013,6 +1056,7 @@ internal sealed class ClockRenderer : IDisposable
 
     public void Dispose()
     {
+        if (captionFont != null) captionFont.Dispose();
         digitLayer.Dispose();
         foreach (GraphicsPath path in glyphs)
             if (path != null) path.Dispose();

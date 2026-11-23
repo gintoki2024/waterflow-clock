@@ -15,6 +15,7 @@
     NSStatusItem *_status;
     NSUserDefaults *_prefs;
     InkSampler *_sampler;
+    ClockCountdown *_countdown;
     NSMenu *_menu;
     NSTimer *_displayTimer;
     NSTimer *_sampleTimer;
@@ -59,6 +60,8 @@
     _view = [[ClockView alloc] initWithFrame:root.bounds];
     _view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable; _view.wantsLayer = YES;
     [root addSubview:_view];
+    _countdown=[ClockCountdown fromRecord:[_prefs objectForKey:@"countdown"]];
+    if (![_prefs boolForKey:@"showClockInstead"]) _view.countdown=_countdown;
     ClockResizeHandle *handle = [[ClockResizeHandle alloc] initWithFrame:NSMakeRect(size.width-27,1,26,26)];
     handle.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
     handle.toolTip = @"拖动以等比例调整时钟大小";
@@ -66,6 +69,9 @@
     handle.didFinishResize = ^(NSSize newSize) { [settings setDouble:newSize.width forKey:@"customWidth"]; };
     [root addSubview:handle];
     _menu = [NSMenu new]; _menu.delegate = self;
+    [self item:@"设置倒计时…" key:@"countdown" value:0 menu:_menu];
+    [self item:@"返回时钟" key:@"clock" value:0 menu:_menu];
+    [_menu addItem:NSMenuItem.separatorItem];
     [self choices:@"外观" key:@"theme" labels:@[@"液态磨砂",@"纯净悬浮",@"极简白瓷",@"深海幽蓝"]];
     [self choices:@"流动效果" key:@"flow" labels:@[@"水波溪流",@"精密滚轮",@"静谧水影",@"纯净极简"]];
     [self choices:@"大小" key:@"scale" labels:@[@"小",@"标准",@"大"]];
@@ -123,10 +129,52 @@
     _glass.layer.cornerRadius = NSWidth(_window.frame)*18./(64*6.35);
     [_view setNeedsDisplay:YES];
 }
+- (void)configureCountdown {
+    NSAlert *dialog=[NSAlert new];
+    dialog.messageText=@"设置倒计时";
+    dialog.informativeText=@"输入名称和时长，最长 99 小时 59 分 59 秒。";
+    [dialog addButtonWithTitle:@"开始"]; [dialog addButtonWithTitle:@"取消"];
+    NSView *form=[[NSView alloc] initWithFrame:NSMakeRect(0,0,306,96)];
+    NSTextField *name=[[NSTextField alloc] initWithFrame:NSMakeRect(0,66,306,24)];
+    name.placeholderString=@"倒计时名称"; name.stringValue=_countdown.name ?: @"";
+    [name setAccessibilityLabel:@"倒计时名称"]; [form addSubview:name];
+    NSInteger duration=_countdown ? _countdown.duration : 300;
+    NSArray *labels=@[@"小时",@"分钟",@"秒"];
+    NSArray *defaults=@[@(duration/3600),@(duration/60%60),@(duration%60)];
+    NSMutableArray<NSTextField *> *fields=[NSMutableArray array];
+    NSView *previous=name;
+    for (NSInteger i=0;i<3;i++) {
+        NSTextField *field=[[NSTextField alloc] initWithFrame:NSMakeRect(i*104,7,92,24)];
+        field.stringValue=[defaults[i] stringValue]; [field setAccessibilityLabel:labels[i]];
+        NSTextField *label=[NSTextField labelWithString:labels[i]];
+        label.frame=NSMakeRect(i*104,33,92,18);
+        [form addSubview:label]; [form addSubview:field]; [fields addObject:field];
+        previous.nextKeyView=field; previous=field;
+    }
+    previous.nextKeyView=name;
+    dialog.accessoryView=form;
+    dialog.window.initialFirstResponder=name;
+    [NSApp activateIgnoringOtherApps:YES];
+    while ([dialog runModal]==NSAlertFirstButtonReturn) {
+        ClockCountdown *entry=[ClockCountdown countdownNamed:name.stringValue hours:fields[0].stringValue
+            minutes:fields[1].stringValue seconds:fields[2].stringValue startingAt:NSDate.date.timeIntervalSince1970];
+        if (entry) {
+            [_prefs setObject:entry.record forKey:@"countdown"];
+            [_prefs setBool:NO forKey:@"showClockInstead"];
+            _countdown=entry; _view.countdown=entry;
+            break;
+        }
+        dialog.informativeText=@"请填写名称。小时为 0–99，分钟和秒为 0–59，总时长须大于零。";
+    }
+}
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     for (NSMenuItem *item in menu.itemArray) {
         NSString *key = item.representedObject;
         if (!key) continue;
+        if ([key isEqual:@"clock"]) {
+            item.hidden=(_countdown==nil);
+            item.title=_view.countdown ? @"返回时钟" : @"显示倒计时";
+        }
         BOOL on = NO;
         if ([key isEqual:@"scale"]) on = fabs(_window.frame.size.width-[ClockView sizeForScale:item.tag].width)<1;
         else if ([@[@"theme",@"flow"] containsObject:key]) on = [_prefs integerForKey:key] == item.tag;
@@ -138,6 +186,12 @@
 }
 - (void)change:(NSMenuItem *)sender {
     NSString *key = sender.representedObject;
+    if ([key isEqual:@"countdown"]) { [self configureCountdown]; return; }
+    if ([key isEqual:@"clock"]) {
+        BOOL showClock=_view.countdown!=nil;
+        [_prefs setBool:showClock forKey:@"showClockInstead"];
+        _view.countdown=showClock ? nil : _countdown; return;
+    }
     if ([key isEqual:@"reset"]) { [self resetPosition]; return; }
     if ([key isEqual:@"capture"]) { [_sampler requestAccess]; return; }
     if ([key isEqual:@"chooseFont"]) {

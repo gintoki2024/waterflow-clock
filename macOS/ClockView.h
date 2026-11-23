@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import "ClockCountdown.h"
 
 @interface ClockView : NSView
 @property(nonatomic) BOOL twelve;
@@ -8,6 +9,7 @@
 @property(nonatomic) NSInteger flow;
 @property(nonatomic) NSInteger scale;
 @property(nonatomic, copy) NSString *fontName;
+@property(nonatomic, strong) ClockCountdown *countdown;
 + (NSSize)sizeForScale:(NSInteger)scale;
 + (NSSize)sizeForWidth:(CGFloat)width;
 @end

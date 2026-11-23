@@ -18,6 +18,7 @@ internal static class ClockSmoke
             CheckRendering(wallpaper);
             CheckHours(wallpaper);
             CheckResize(wallpaper);
+            CheckCountdown(wallpaper);
         }
         if (Array.IndexOf(args, "--renderer-only") < 0) CheckWindow();
         Console.WriteLine("Windows clock smoke checks passed.");
@@ -84,6 +85,41 @@ internal static class ClockSmoke
                 ClockWindow.PaintGrip(frame, true);
                 if (Same(before, Pixels(frame))) throw new Exception("Resize grip did not appear.");
             }
+        }
+    }
+
+    private static void CheckCountdown(Wallpaper wallpaper)
+    {
+        var start = new DateTime(2025, 1, 1, 23, 59, 58, DateTimeKind.Utc);
+        var session = Countdown.Start("  项目交付  ", Countdown.MaximumSeconds, start);
+        var restored = Countdown.Restore(session.Store());
+        if (restored == null || restored.Name != "项目交付" || !restored.Visible ||
+            restored.Duration != Countdown.MaximumSeconds || restored.Deadline != session.Deadline ||
+            restored.Deadline.Kind != DateTimeKind.Utc ||
+            Countdown.Format(restored.Remaining(start.AddMilliseconds(999))) != "99:59:59" ||
+            Countdown.Format(restored.Remaining(start.AddDays(1))) != "75:59:59" ||
+            restored.Remaining(restored.Deadline.AddMilliseconds(-1)) != 1 ||
+            restored.Remaining(restored.Deadline.AddDays(1)) != 0 ||
+            Countdown.Restore(session.WithVisibility(false).Store()).Visible ||
+            Countdown.Restore(new[] { "a", "10", "broken", "1" }) != null)
+            throw new Exception("Countdown validation, restoration, rounding or expiry failed.");
+        foreach (var input in new[] { new { Name = " ", Seconds = 1 }, new { Name = "工作", Seconds = 0 },
+            new { Name = "工作", Seconds = Countdown.MaximumSeconds + 1 } })
+        {
+            try { Countdown.Start(input.Name, input.Seconds, start); }
+            catch (ArgumentException) { continue; }
+            throw new Exception("Invalid countdown accepted.");
+        }
+        using (var renderer = new ClockRenderer("Segoe UI", ClockTheme.PureFloating, ClockScale.Compact, ClockFlowStyle.LiquidStream))
+        using (var active = renderer.RenderCountdown(session, start, Point.Empty, wallpaper))
+        using (var renamed = renderer.RenderCountdown(Countdown.Start("读书", session.Duration, start), start, Point.Empty, wallpaper))
+        using (var expired = renderer.RenderCountdown(session, session.Deadline, Point.Empty, wallpaper))
+        using (var later = renderer.RenderCountdown(session, session.Deadline.AddDays(5), Point.Empty, wallpaper))
+        using (var clock = renderer.Render(start, false, Point.Empty, wallpaper))
+        {
+            if (Same(Pixels(active), Pixels(renamed)) || Same(Pixels(active), Pixels(expired)) ||
+                !Same(Pixels(expired), Pixels(later)) || Same(Pixels(clock), Pixels(expired)))
+                throw new Exception("Countdown caption, digits, zero hold or return-to-clock rendering failed.");
         }
     }
 
