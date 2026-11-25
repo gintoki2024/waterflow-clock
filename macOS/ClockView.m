@@ -69,8 +69,9 @@ static void FillGlyph(CGContextRef ctx, CGPathRef glyph, CGFloat alpha) {
 // Dedicated Scene Backgrounds (drawn inset inside the glass card when theme != 1)
 // =========================================================================
 static void DrawSceneBackground(CGContextRef ctx, CGRect bounds, NSInteger flow, NSInteger theme,
+                                NSInteger customBgMode, NSColor *customBgColor, NSImage *customBgImage,
                                 double animTime, BOOL frozen) {
-    if (theme == 1) return; // PureFloating stays completely borderless & transparent
+    if (theme == 1 && customBgMode == 0) return; // PureFloating stays completely transparent unless custom bg is set
     BOOL light = (theme == 2);
     CGRect card = CGRectInset(bounds, 5.0, 5.0);
     CGFloat radius = MAX(8.0, bounds.size.width * 16.0 / (64.0 * 6.35));
@@ -79,6 +80,29 @@ static void DrawSceneBackground(CGContextRef ctx, CGRect bounds, NSInteger flow,
     CGContextSaveGState(ctx);
     CGContextAddPath(ctx, clip);
     CGContextClip(ctx);
+
+    // Custom Image or Custom Solid Color background takes priority
+    if (customBgMode == 2 && customBgImage) {
+        NSSize imgSz = customBgImage.size;
+        if (imgSz.width > 0 && imgSz.height > 0) {
+            CGFloat sx = card.size.width / imgSz.width;
+            CGFloat sy = card.size.height / imgSz.height;
+            CGFloat sc = MAX(sx, sy);
+            CGFloat dw = imgSz.width * sc, dh = imgSz.height * sc;
+            CGRect dest = CGRectMake(CGRectGetMidX(card) - dw * 0.5, CGRectGetMidY(card) - dh * 0.5, dw, dh);
+            [customBgImage drawInRect:dest fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:0.94];
+        }
+        CGContextRestoreGState(ctx);
+        CGPathRelease(clip);
+        return;
+    }
+    if (customBgMode == 1 && customBgColor) {
+        [[customBgColor colorWithAlphaComponent:0.90] setFill];
+        CGContextFillRect(ctx, card);
+        CGContextRestoreGState(ctx);
+        CGPathRelease(clip);
+        return;
+    }
 
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
 
@@ -94,7 +118,6 @@ static void DrawSceneBackground(CGContextRef ctx, CGRect bounds, NSInteger flow,
         CGGradientRelease(grad);
 
         if (!frozen) {
-            // Soft drifting caustic light ribbons
             CGFloat t = (CGFloat)animTime;
             for (int i = 0; i < 6; i++) {
                 CGFloat h1 = Hash01(i * 41 + 7);
@@ -113,17 +136,29 @@ static void DrawSceneBackground(CGContextRef ctx, CGRect bounds, NSInteger flow,
             }
         }
     } else if (flow == 1) {
-        // EmberBurn: dark charred obsidian basalt + warm dormant hearth glow at the bottom
+        // Stardust: cosmic midnight aurora nebula + delicate scattered pinpoint stars
         CGFloat comps[12] = {
-            light ? 0.88 : 0.08, light ? 0.87 : 0.07, light ? 0.86 : 0.07, light ? 0.34 : 0.68,
-            light ? 0.86 : 0.11, light ? 0.83 : 0.08, light ? 0.80 : 0.07, light ? 0.38 : 0.72,
-            light ? 0.92 : 0.26, light ? 0.82 : 0.10, light ? 0.76 : 0.05, light ? 0.42 : 0.76
+            light ? 0.94 : 0.07, light ? 0.91 : 0.06, light ? 0.98 : 0.16, light ? 0.36 : 0.62,
+            light ? 0.91 : 0.09, light ? 0.93 : 0.10, light ? 0.99 : 0.24, light ? 0.38 : 0.66,
+            light ? 0.96 : 0.05, light ? 0.93 : 0.08, light ? 0.90 : 0.17, light ? 0.40 : 0.68
         };
-        CGFloat locs[3] = {0.0, 0.62, 1.0};
+        CGFloat locs[3] = {0.0, 0.55, 1.0};
         CGGradientRef grad = CGGradientCreateWithColorComponents(cs, comps, locs, 3);
-        CGContextDrawLinearGradient(ctx, grad, CGPointMake(0, CGRectGetMaxY(card)),
-                                    CGPointMake(0, CGRectGetMinY(card)), 0);
+        CGContextDrawLinearGradient(ctx, grad, CGPointMake(CGRectGetMinX(card), CGRectGetMaxY(card)),
+                                    CGPointMake(CGRectGetMaxX(card), CGRectGetMinY(card)), 0);
         CGGradientRelease(grad);
+
+        for (int i = 0; i < 20; i++) {
+            CGFloat hx = Hash01(i * 47 + 13), hy = Hash01(i * 83 + 29), hb = Hash01(i * 61 + 5);
+            CGFloat sx = CGRectGetMinX(card) + 8.0 + hx * MAX(4.0, card.size.width - 16.0);
+            CGFloat sy = CGRectGetMinY(card) + 8.0 + hy * MAX(4.0, card.size.height - 16.0);
+            CGFloat r = 0.75 + hb * 1.1;
+            CGFloat a = (light ? 0.24 : 0.46) * (0.45 + 0.55 * hb);
+            if (i % 3 == 0) CGContextSetRGBFillColor(ctx, 1.0, 0.91, 0.68, a);
+            else if (i % 3 == 1) CGContextSetRGBFillColor(ctx, 0.60, 0.91, 1.0, a);
+            else CGContextSetRGBFillColor(ctx, 0.83, 0.76, 1.0, a);
+            CGContextFillEllipseInRect(ctx, CGRectMake(sx - r, sy - r, r * 2.0, r * 2.0));
+        }
     } else if (flow == 2) {
         // IceShards: glacial crystal glass with organic soft frost rim
         CGFloat comps[8] = {
@@ -180,125 +215,116 @@ static void DrawSceneBackground(CGContextRef ctx, CGRect bounds, NSInteger flow,
 }
 
 // =========================================================================
-// 1. EMBER BURN: Multi-harmonic jagged flame front, 4-stage blackbody thermal
-//    glow, dynamic firelight bloom, forging reveal, and 34 rising embers & ash.
+// 1. STARDUST: Diagonal cosmic dissolve wave, aurora starlight sheen, and
+//    40 luminous stardust particles & 4-point star glints drifting on a cosmic breeze.
 // =========================================================================
-static CGFloat BurnHeight(CGFloat x, CGFloat p, int seed, CGFloat energy) {
-    CGFloat wave = sin(x * 13.0 + seed * 0.7 + p * 5.2) * 0.52
-                 + sin(x * 27.0 - seed * 1.1 - p * 8.4) * 0.30
-                 + cos(x * 41.0 + seed * 0.3 + p * 11.0) * 0.18;
-    CGFloat arch = sin((x + 0.46) / 0.92 * M_PI) * 0.032 * energy;
-    return -0.58 + 1.18 * p + arch + 0.052 * energy * wave;
-}
-
-static void StrokeBurnLine(CGContextRef ctx, CGFloat p, int seed, CGFloat energy, CGFloat yOffset,
-                           CGFloat r, CGFloat g, CGFloat b, CGFloat a, CGFloat width) {
-    CGContextBeginPath(ctx);
-    for (int j = 0; j <= 28; j++) {
-        CGFloat x = -0.46 + 0.92 * j / 28.0;
-        CGFloat y = BurnHeight(x, p, seed, energy) + yOffset;
-        if (j == 0) CGContextMoveToPoint(ctx, x, y);
-        else CGContextAddLineToPoint(ctx, x, y);
-    }
-    CGContextSetRGBStrokeColor(ctx, r, g, b, a);
-    CGContextSetLineWidth(ctx, width);
-    CGContextSetLineJoin(ctx, kCGLineJoinRound);
-    CGContextSetLineCap(ctx, kCGLineCapRound);
-    CGContextStrokePath(ctx);
-}
-
-static void PaintEmbers(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t, int seed, BOOL hasBg, BOOL darkInk) {
+static void PaintStardust(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t, int seed, BOOL hasBg, BOOL darkInk) {
     CGFloat p = t * t * (3.0 - 2.0 * t);
-    CGFloat energy = pow(sin(t * M_PI), 0.70);
+    CGFloat energy = sin(t * M_PI);
+    CGFloat frontY = -0.58 + 1.16 * p;
+    CGFloat slant = 0.20;
 
-    // Dynamic ambient firelight on obsidian background
-    if (hasBg && !darkInk && energy > 0.04) {
+    if (hasBg && energy > 0.04) {
         CGContextSaveGState(ctx);
-        CGFloat fy = -0.56 + 1.12 * p;
         CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
-        CGFloat comps[8] = {1.0, 0.36, 0.07, 0.36 * energy, 1.0, 0.24, 0.04, 0.0};
+        CGFloat comps[8] = {0.72, 0.62, 1.0, (darkInk ? 0.16 : 0.28) * energy, 0.55, 0.92, 1.0, 0.0};
         CGGradientRef grad = CGGradientCreateWithColorComponents(cs, comps, NULL, 2);
-        CGContextDrawRadialGradient(ctx, grad, CGPointMake(0, fy), 0.02, CGPointMake(0, fy), 0.52, 0);
+        CGContextDrawRadialGradient(ctx, grad, CGPointMake(0, frontY), 0.02, CGPointMake(0, frontY), 0.52, 0);
         CGGradientRelease(grad);
         CGColorSpaceRelease(cs);
         CGContextRestoreGState(ctx);
     }
 
-    // Incoming glyph emerging below the burn front (cooling from warm ember light)
-    CGContextSaveGState(ctx);
-    CGContextBeginPath(ctx);
-    CGContextMoveToPoint(ctx, -0.48, -0.85);
-    for (int j = 0; j <= 28; j++) {
-        CGFloat x = -0.48 + 0.96 * j / 28.0;
-        CGContextAddLineToPoint(ctx, x, BurnHeight(x, p, seed, energy));
+    // Departing glyph dissolving above the diagonal stardust frontier
+    CGFloat oldAlpha = pow(1.0 - t, 0.72);
+    if (oldAlpha > 0.02) {
+        CGContextSaveGState(ctx);
+        CGContextBeginPath(ctx);
+        CGContextMoveToPoint(ctx, -0.46, frontY - slant);
+        CGContextAddLineToPoint(ctx, 0.46, frontY + slant);
+        CGContextAddLineToPoint(ctx, 0.46, 0.95);
+        CGContextAddLineToPoint(ctx, -0.46, 0.95);
+        CGContextClosePath(ctx);
+        CGContextClip(ctx);
+        CGContextTranslateCTM(ctx, 0.03 * t, 0.07 * t);
+        FillGlyph(ctx, old, oldAlpha);
+        CGContextAddPath(ctx, old);
+        CGContextClip(ctx);
+        CGContextSetRGBStrokeColor(ctx, darkInk ? 0.78 : 1.0, darkInk ? 0.54 : 0.91, darkInk ? 0.14 : 0.65, 0.85 * energy);
+        CGContextSetLineWidth(ctx, 0.075);
+        CGContextMoveToPoint(ctx, -0.46, frontY - slant);
+        CGContextAddLineToPoint(ctx, 0.46, frontY + slant);
+        CGContextStrokePath(ctx);
+        CGContextRestoreGState(ctx);
     }
-    CGContextAddLineToPoint(ctx, 0.48, -0.85);
-    CGContextClosePath(ctx);
-    CGContextClip(ctx);
-    FillGlyph(ctx, next, pow(t, 0.65));
-    CGContextAddPath(ctx, next);
-    CGContextClip(ctx);
-    StrokeBurnLine(ctx, p, seed, energy, -0.01, 1.0, 0.50, 0.14, 0.78 * energy, 0.095);
-    StrokeBurnLine(ctx, p, seed, energy, -0.005, 1.0, 0.88, 0.56, 0.90 * energy, 0.032);
-    CGContextRestoreGState(ctx);
 
-    // Departing glyph above the burn front with 4-stage blackbody thermal gradient
-    CGContextSaveGState(ctx);
-    CGContextBeginPath(ctx);
-    CGContextMoveToPoint(ctx, -0.48, 0.85);
-    for (int j = 0; j <= 28; j++) {
-        CGFloat x = -0.48 + 0.96 * j / 28.0;
-        CGContextAddLineToPoint(ctx, x, BurnHeight(x, p, seed, energy));
+    // Incoming glyph coalescing below the frontier
+    CGFloat newAlpha = pow(t, 0.62);
+    if (newAlpha > 0.02) {
+        CGContextSaveGState(ctx);
+        CGContextBeginPath(ctx);
+        CGContextMoveToPoint(ctx, -0.46, frontY - slant);
+        CGContextAddLineToPoint(ctx, 0.46, frontY + slant);
+        CGContextAddLineToPoint(ctx, 0.46, -0.95);
+        CGContextAddLineToPoint(ctx, -0.46, -0.95);
+        CGContextClosePath(ctx);
+        CGContextClip(ctx);
+        CGFloat inv = 1.0 - t;
+        CGContextTranslateCTM(ctx, 0.0, -0.045 * inv * inv);
+        FillGlyph(ctx, next, newAlpha);
+        CGContextAddPath(ctx, next);
+        CGContextClip(ctx);
+        CGContextSetRGBStrokeColor(ctx, darkInk ? 0.16 : 0.56, darkInk ? 0.57 : 0.92, darkInk ? 0.77 : 1.0, 0.78 * energy);
+        CGContextSetLineWidth(ctx, 0.068);
+        CGContextMoveToPoint(ctx, -0.46, frontY - slant);
+        CGContextAddLineToPoint(ctx, 0.46, frontY + slant);
+        CGContextStrokePath(ctx);
+        CGContextRestoreGState(ctx);
     }
-    CGContextAddLineToPoint(ctx, 0.48, 0.85);
-    CGContextClosePath(ctx);
-    CGContextClip(ctx);
-    FillGlyph(ctx, old, 1.0);
-    CGContextAddPath(ctx, old);
-    CGContextClip(ctx);
-    // Stage 1: charred soot -> Stage 2: deep crimson -> Stage 3: blazing orange -> Stage 4: white-gold core
-    StrokeBurnLine(ctx, p, seed, energy, 0.030, 0.11, 0.05, 0.03, 0.84 * energy, 0.16);
-    StrokeBurnLine(ctx, p, seed, energy, 0.015, 0.84, 0.16, 0.04, 0.92 * energy, 0.105);
-    StrokeBurnLine(ctx, p, seed, energy, 0.005, 1.00, 0.46, 0.08, 0.96 * energy, 0.062);
-    StrokeBurnLine(ctx, p, seed, energy, 0.000, 1.00, 0.95, 0.72, 1.00 * energy, 0.026);
-    CGContextRestoreGState(ctx);
 
-    // 34 turbulent rising embers with glow halos + dark ash flakes
-    CGContextSaveGState(ctx);
-    for (int j = 0; j < 34; j++) {
-        CGFloat h1 = Hash01(seed * 17 + j * 43);
-        CGFloat h2 = Hash01(seed * 31 + j * 61);
-        CGFloat h3 = Hash01(seed * 13 + j * 89);
-        CGFloat phase = fmod(t * (1.25 + h2 * 1.10) + h1 * 0.90, 1.0);
-        CGFloat life = energy * sin(phase * M_PI);
-        if (life <= 0.04) continue;
+    // 40 luminous stardust particles & 4-point star-glint sparkles
+    if (energy > 0.03) {
+        CGContextSaveGState(ctx);
+        for (int j = 0; j < 40; j++) {
+            CGFloat h1 = Hash01(seed * 17 + j * 41);
+            CGFloat h2 = Hash01(seed * 29 + j * 67);
+            CGFloat h3 = Hash01(seed * 13 + j * 97);
+            CGFloat phase = fmod(t * (1.20 + h2 * 1.05) + h1 * 0.88, 1.0);
+            CGFloat life = energy * sin(phase * M_PI);
+            if (life <= 0.04) continue;
 
-        CGFloat sx = (h1 - 0.5) * 0.74;
-        CGFloat sy = BurnHeight(sx, p, seed, energy);
-        CGFloat drift = sin(phase * 7.2 + j * 1.9) * (0.04 + 0.05 * h2);
-        CGFloat px = sx + drift;
-        CGFloat py = sy + (0.04 + (0.38 + 0.34 * h3) * phase * (0.75 + 0.45 * phase));
+            CGFloat ux = h1 - 0.5;
+            CGFloat baseY = frontY + ux * slant * 2.0 + (h2 - 0.5) * 0.14;
+            CGFloat px = ux * 0.76 + (0.05 + 0.12 * h3) * phase + sin(phase * 6.0 + j) * 0.03;
+            CGFloat py = baseY + (0.04 + (0.34 + 0.36 * h2) * phase);
+            CGFloat twinkle = 0.55 + 0.45 * sin(t * 22.0 + j * 2.3);
+            CGFloat a = life * twinkle;
+            CGFloat r = (0.008 + 0.011 * h3) * (1.0 - 0.45 * phase);
 
-        if (j % 6 == 0) {
-            CGFloat ar = 0.011 + 0.009 * h2;
-            CGContextSetRGBFillColor(ctx, 0.14, 0.10, 0.09, 0.62 * life);
-            CGContextFillEllipseInRect(ctx, CGRectMake(px - ar, py - ar * 0.6, ar * 2.0, ar * 1.2));
-        } else {
-            CGFloat r = (0.009 + 0.009 * h2) * (1.0 - 0.52 * phase);
-            CGContextSetRGBFillColor(ctx, 1.0, 0.42, 0.09, 0.28 * life);
-            CGContextFillEllipseInRect(ctx, CGRectMake(px - r * 2.4, py - r * 2.4, r * 4.8, r * 4.8));
+            CGFloat cr, cg, cb;
+            if (j % 3 == 0) { cr = darkInk ? 0.78 : 1.0; cg = darkInk ? 0.54 : 0.91; cb = darkInk ? 0.14 : 0.65; }
+            else if (j % 3 == 1) { cr = darkInk ? 0.16 : 0.56; cg = darkInk ? 0.57 : 0.92; cb = darkInk ? 0.77 : 1.0; }
+            else { cr = darkInk ? 0.50 : 0.79; cg = darkInk ? 0.36 : 0.70; cb = darkInk ? 0.82 : 1.0; }
 
-            CGFloat cg = phase < 0.32 ? (0.96 - 0.34 * (phase / 0.32)) : (0.62 - 0.46 * ((phase - 0.32) / 0.68));
-            CGFloat cb = phase < 0.32 ? (0.78 - 0.62 * (phase / 0.32)) : 0.06;
-            CGContextSetRGBStrokeColor(ctx, 1.0, cg, cb, life);
-            CGContextSetLineWidth(ctx, r * 1.45);
-            CGContextSetLineCap(ctx, kCGLineCapRound);
-            CGContextMoveToPoint(ctx, px, py);
-            CGContextAddLineToPoint(ctx, px - drift * 0.12, py - r * (2.4 + 2.2 * h3));
-            CGContextStrokePath(ctx);
+            CGContextSetRGBFillColor(ctx, cr, cg, cb, 0.26 * a);
+            CGContextFillEllipseInRect(ctx, CGRectMake(px - r * 2.3, py - r * 2.3, r * 4.6, r * 4.6));
+
+            if (j % 4 == 0) {
+                CGFloat arm = r * 2.7;
+                CGContextSetRGBStrokeColor(ctx, cr, cg, cb, 0.92 * a);
+                CGContextSetLineWidth(ctx, MAX(0.006, r * 0.65));
+                CGContextMoveToPoint(ctx, px - arm, py); CGContextAddLineToPoint(ctx, px + arm, py);
+                CGContextMoveToPoint(ctx, px, py - arm); CGContextAddLineToPoint(ctx, px, py + arm);
+                CGContextStrokePath(ctx);
+                CGContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 0.95 * a);
+                CGContextFillEllipseInRect(ctx, CGRectMake(px - r * 0.7, py - r * 0.7, r * 1.4, r * 1.4));
+            } else {
+                CGContextSetRGBFillColor(ctx, cr, cg, cb, 0.90 * a);
+                CGContextFillEllipseInRect(ctx, CGRectMake(px - r, py - r, r * 2.0, r * 2.0));
+            }
         }
+        CGContextRestoreGState(ctx);
     }
-    CGContextRestoreGState(ctx);
 }
 
 // =========================================================================
@@ -599,10 +625,12 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
     NSArray *_paths;
     NSArray *_unitPaths;
     NSString *_cachedName;
+    NSString *_cachedBgPath;
+    NSImage *_cachedBgImage;
     CGFloat _faceScale;
     CGRect _boundsForDigit[10];
-    int _digits[8], _oldDigits[8];
-    double _start[8];
+    int _digits[10], _oldDigits[10];
+    double _start[10];
     BOOL _started;
     BOOL _isAnimating;
 }
@@ -613,8 +641,8 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
     return [self sizeForWidth:ClockUnit(scale)*6.35];
 }
 + (NSSize)sizeForWidth:(CGFloat)width {
-    CGFloat w = isfinite(width) ? MAX(160,MIN(2400,width)) : ClockUnit(1)*6.35;
-    return NSMakeSize(w,w*3.30/6.35);
+    CGFloat w = isfinite(width) ? MAX(160, MIN(2400, width)) : ClockUnit(1) * 6.35;
+    return NSMakeSize(w, w * 2.05 / 6.35);
 }
 - (BOOL)isOpaque { return NO; }
 - (BOOL)mouseDownCanMoveWindow { return YES; }
@@ -705,9 +733,9 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
     // Strict horizontal column clip prevents debris from touching adjacent fixed digits.
     CGContextClipToRect(ctx, CGRectMake(-0.44, -1.25, 0.88, 2.50));
     int seed = slot * 13 + _oldDigits[slot] * 7 + _digits[slot] * 19;
-    BOOL hasCard = (self.theme != 1);
+    BOOL hasCard = (self.theme != 1 || self.customBgMode != 0);
     switch (self.flow) {
-        case 1: PaintEmbers(ctx, old, next, p, seed, hasCard, dark); break;
+        case 1: PaintStardust(ctx, old, next, p, seed, hasCard, dark); break;
         case 2: PaintIce(ctx, old, next, p, seed, dark); break;
         case 3: PaintFlap(ctx, old, next, p, hasCard, dark); break;
     }
@@ -719,10 +747,10 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
     [self prepareGlyphs];
     CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
     CGContextClearRect(ctx, dirtyRect);
-    CGFloat unit = MIN(NSWidth(self.bounds)/6.35, NSHeight(self.bounds)/3.30);
+    CGFloat unit = MIN(NSWidth(self.bounds)/6.35, NSHeight(self.bounds)/2.05);
     BOOL counting = self.countdown != nil;
-    if (counting) unit *= .88;
-    CGFloat center = NSHeight(self.bounds) * (counting ? .42 : .50);
+    if (counting) unit *= .92;
+    CGFloat center = NSHeight(self.bounds) * 0.43;
     CGFloat x = NSMidX(self.bounds) - unit * 2.76;
     NSTimeInterval absolute = self.wallTime;
     time_t second = (time_t)floor(absolute);
@@ -743,21 +771,42 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
         sec = local.tm_sec;
     }
     BOOL expired = counting && remaining == 0;
+    BOOL secondsOnly = counting && self.countdown.showSecondsOnly;
     NSInteger flow = self.flow;
     if (flow < 0 || flow > 3) flow = 0;
 
-    // Dedicated scene background (skipped in PureFloating theme == 1)
-    DrawSceneBackground(ctx, self.bounds, flow, self.theme, now, expired || counting);
+    if (self.customBgMode == 2 && self.customBgImagePath.length) {
+        if (![_cachedBgPath isEqualToString:self.customBgImagePath]) {
+            _cachedBgPath = [self.customBgImagePath copy];
+            _cachedBgImage = [[NSImage alloc] initWithContentsOfFile:_cachedBgPath];
+        }
+    } else {
+        _cachedBgPath = nil;
+        _cachedBgImage = nil;
+    }
 
-    int values[] = {hour/10, hour%10, -1, minute/10, minute%10, -1, sec/10, sec%10};
+    // Dedicated scene background (or custom color/image background)
+    DrawSceneBackground(ctx, self.bounds, flow, self.theme, self.customBgMode, self.customBgColor, _cachedBgImage, now, expired || counting);
+
+    int values[10];
+    int count = 8;
+    if (secondsOnly) {
+        NSString *secStr = [NSString stringWithFormat:@"%ld", (long)remaining];
+        count = (int)MIN((NSUInteger)10, secStr.length);
+        for (int i = 0; i < count; i++) values[i] = [secStr characterAtIndex:i] - '0';
+    } else {
+        int hms[8] = {hour/10, hour%10, -1, minute/10, minute%10, -1, sec/10, sec%10};
+        for (int i = 0; i < 8; i++) values[i] = hms[i];
+    }
+
     int rank = 0;
-    for (int i = 7; i >= 0; i--) {
+    for (int i = count - 1; i >= 0; i--) {
         if (values[i] < 0) continue;
         if (!_started || _digits[i] != values[i]) {
             _oldDigits[i] = _started ? _digits[i] : values[i];
             _digits[i] = values[i];
             _start[i] = _started ? now + 0.052 * rank : now - 2.0;
-            if (!(flow == 0 && i == 7)) rank++;
+            if (!(flow == 0 && !counting && i == 7)) rank++;
         }
     }
     _started = YES;
@@ -785,55 +834,57 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
     }
 
     BOOL anyAnimating = (!expired && flow == 0 && !counting);
-    double effectDuration = (flow == 3) ? 0.64 : (flow == 2 ? 0.88 : 0.86);
+    double effectDuration = (flow == 3) ? 0.64 : (flow == 2 ? 0.88 : 0.82);
 
-    for (int i = 0; i < 8; i++) {
+    CGFloat slotUnit = unit;
+    if (secondsOnly) {
+        CGFloat avail = NSWidth(self.bounds) * 0.86;
+        CGFloat needed = count * unit * 0.80;
+        if (needed > avail && needed > 1.0) slotUnit = unit * (avail / needed);
+        x = NSMidX(self.bounds) - (count * slotUnit * 0.80) * 0.5;
+    }
+
+    for (int i = 0; i < count; i++) {
         BOOL colon = values[i] < 0;
-        CGFloat slot = unit * (colon ? .36 : .80);
+        CGFloat slot = slotUnit * (colon ? .36 : .80);
         CGFloat cx = x + slot * .5;
         x += slot;
         if (colon) {
             CGFloat colonAlpha = (flow >= 1) ? 0.85 : (0.58 + 0.34 * cos(fraction * 2.0 * M_PI));
             [[accent colorWithAlphaComponent:colonAlpha] setFill];
-            CGFloat r = unit * .045;
+            CGFloat r = slotUnit * .045;
             for (int sign = -1; sign <= 1; sign += 2)
-                CGContextFillEllipseInRect(ctx, CGRectMake(cx - r, center + sign * unit * .17 - r, 2 * r, 2 * r));
+                CGContextFillEllipseInRect(ctx, CGRectMake(cx - r, center + sign * slotUnit * .17 - r, 2 * r, 2 * r));
             continue;
         }
-        [(i >= 6 ? accent : ink) setFill];
+        BOOL isAccent = secondsOnly ? (i == count - 1) : (i >= 6);
+        [(isAccent ? accent : ink) setFill];
 
-        if (flow == 0 && counting) {
-            [self paintDigit:_digits[i] x:cx y:center unit:unit depth:0 alpha:1 context:ctx];
-            continue;
-        }
-        if (flow == 0 && i == 7) {
-            // C1-continuous liquid stream on seconds ones-digit + rising micro-bubbles
+        if (flow == 0 && !counting && i == 7 && !expired) {
             double p = fraction - 0.095 * sin(2.0 * M_PI * fraction);
             for (int offset = -1; offset <= 2; offset++) {
                 double depth = p - offset;
                 CGFloat fading = MAX(0., 1.0 - pow(fabs(depth) / 1.44, 1.55));
                 int d = (values[i] + offset + 10) % 10;
-                CGFloat wave = sin(depth * M_PI * 1.4 - now * 3.8) * unit * 0.042 * fabs(depth);
-                [self paintDigit:d x:cx + wave y:center + unit * 1.05 * depth unit:unit
+                CGFloat wave = sin(depth * M_PI * 1.4 - now * 3.8) * slotUnit * 0.042 * fabs(depth);
+                [self paintDigit:d x:cx + wave y:center + slotUnit * 1.05 * depth unit:slotUnit
                            depth:depth alpha:fading context:ctx];
             }
-            if (!counting) {
-                CGContextSaveGState(ctx);
-                for (int b = 0; b < 6; b++) {
-                    CGFloat h1 = Hash01(b * 43 + 17);
-                    CGFloat h2 = Hash01(b * 79 + 31);
-                    CGFloat cyc = fmod(now * (0.28 + 0.24 * h1) + h2, 1.0);
-                    CGFloat env = sin(cyc * M_PI);
-                    if (env < 0.05) continue;
-                    CGFloat bx = cx + (h1 - 0.5) * unit * 0.72 + sin(cyc * 7.5 + b * 2.1) * 2.5;
-                    CGFloat by = center - unit * 1.2 + cyc * unit * 2.4;
-                    CGFloat br = MAX(1.0, unit * (0.018 + 0.015 * h2));
-                    [[accent colorWithAlphaComponent:0.35 * env] setStroke];
-                    CGContextSetLineWidth(ctx, 0.9);
-                    CGContextStrokeEllipseInRect(ctx, CGRectMake(bx - br, by - br, br * 2.0, br * 2.0));
-                }
-                CGContextRestoreGState(ctx);
+            CGContextSaveGState(ctx);
+            for (int b = 0; b < 6; b++) {
+                CGFloat h1 = Hash01(b * 43 + 17);
+                CGFloat h2 = Hash01(b * 79 + 31);
+                CGFloat cyc = fmod(now * (0.28 + 0.24 * h1) + h2, 1.0);
+                CGFloat env = sin(cyc * M_PI);
+                if (env < 0.05) continue;
+                CGFloat bx = cx + (h1 - 0.5) * slotUnit * 0.72 + sin(cyc * 7.5 + b * 2.1) * 2.5;
+                CGFloat by = center - slotUnit * 1.2 + cyc * slotUnit * 2.4;
+                CGFloat br = MAX(1.0, slotUnit * (0.018 + 0.015 * h2));
+                [[accent colorWithAlphaComponent:0.35 * env] setStroke];
+                CGContextSetLineWidth(ctx, 0.9);
+                CGContextStrokeEllipseInRect(ctx, CGRectMake(bx - br, by - br, br * 2.0, br * 2.0));
             }
+            CGContextRestoreGState(ctx);
             continue;
         }
 
@@ -842,19 +893,19 @@ static void PaintFlap(CGContextRef ctx, CGPathRef old, CGPathRef next, CGFloat t
         if (!expired && elapsed < effectDuration + 0.04) anyAnimating = YES;
 
         if (flow >= 1 && flow <= 3) {
-            [self paintEffectAtSlot:i center:CGPointMake(cx, center) unit:unit progress:t darkInk:dark context:ctx];
+            [self paintEffectAtSlot:i center:CGPointMake(cx, center) unit:slotUnit progress:t darkInk:dark context:ctx];
             continue;
         }
 
-        // LiquidStream stepped digits (hours, minutes, tens-of-seconds)
+        // LiquidStream stepped digits (hours, minutes, tens-of-seconds, AND countdown!)
         double sineEase = 0.5 - 0.5 * cos(t * M_PI);
         double decelEase = 1.0 - pow(1.0 - t, 2.2);
         double p = sineEase * 0.68 + decelEase * 0.32;
-        CGFloat drift = unit * 0.038 * sin(p * M_PI * 1.4);
+        CGFloat drift = slotUnit * 0.038 * sin(p * M_PI * 1.4);
         if (p < 1.0)
-            [self paintDigit:_oldDigits[i] x:cx + drift y:center + unit * 1.05 * p unit:unit depth:p
+            [self paintDigit:_oldDigits[i] x:cx + drift y:center + slotUnit * 1.05 * p unit:slotUnit depth:p
                        alpha:pow(1.0 - p, 0.62) context:ctx];
-        [self paintDigit:_digits[i] x:cx - drift * (1.0 - p) y:center - unit * 1.05 * (1.0 - p) unit:unit
+        [self paintDigit:_digits[i] x:cx - drift * (1.0 - p) y:center - slotUnit * 1.05 * (1.0 - p) unit:slotUnit
                    depth:1.0 - p alpha:pow(p, 0.52) context:ctx];
     }
 

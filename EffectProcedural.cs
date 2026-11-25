@@ -149,31 +149,28 @@ internal static class EffectProcedural
                 break;
             }
 
-            case ClockFlowStyle.EmberBurn:
+            case ClockFlowStyle.Stardust:
             {
-                // Charred obsidian basalt stone with fine tactile mineral grain + warm hearth floor glow
-                float grain = SampleFbm(x * 0.35f, y * 0.35f);
-                float vig = (float)(Math.Pow((u - 0.5f) * 2f, 2) + Math.Pow((v - 0.5f) * 2f, 2));
+                // Cosmic midnight aurora nebula with gentle violet/cyan stardust haze
+                float neb1 = SampleFbm(x * 0.22f + 11f, y * 0.22f + 7f);
+                float neb2 = SampleRidge(x * 0.34f + 31f, y * 0.34f + 19f);
+                float aurora = Math.Max(0f, (neb1 * 0.65f + neb2 * 0.35f) - 0.32f) * 1.45f;
                 if (!light)
                 {
-                    double darkMix = 0.52;
-                    double stone = 16.0 + grain * 18.0 - vig * 6.0;
-                    r = r * (1.0 - darkMix) + (stone + 5.0) * darkMix;
-                    g = g * (1.0 - darkMix) + (stone) * darkMix;
-                    b = b * (1.0 - darkMix) + (stone - 2.0) * darkMix;
-
-                    // Subtle dormant charcoal glow along the bottom edge
-                    double hearth = Math.Pow(Math.Max(0.0, v - 0.42) / 0.58, 2.2) * (0.65 + 0.35 * grain);
-                    r += hearth * 34.0;
-                    g += hearth * 9.0;
-                    b += hearth * 2.0;
+                    double mix = 0.56;
+                    double baseR = 12.0 + aurora * (38.0 + 26.0 * u);
+                    double baseG = 14.0 + aurora * (28.0 + 34.0 * (1f - v));
+                    double baseB = 28.0 + aurora * (68.0 + 28.0 * (1f - u));
+                    r = r * (1.0 - mix) + baseR * mix;
+                    g = g * (1.0 - mix) + baseG * mix;
+                    b = b * (1.0 - mix) + baseB * mix;
                 }
                 else
                 {
-                    double ash = (grain - 0.5) * 14.0;
-                    r += ash + 4.0 * Math.Max(0.0, v - 0.5);
-                    g += ash;
-                    b += ash - 3.0;
+                    // Soft champagne-violet stardust sheen for PorcelainLight
+                    r += aurora * 10.0;
+                    g += aurora * 6.0;
+                    b += aurora * 14.0;
                 }
                 break;
             }
@@ -267,6 +264,25 @@ internal static class EffectProcedural
                     g.FillEllipse(head, sc.X - screwR, sc.Y - screwR, screwR * 2f, screwR * 2f);
                 using (var slot = new Pen(light ? Color.FromArgb(140, 82, 90, 102) : Color.FromArgb(180, 14, 18, 26), 0.9f))
                     g.DrawLine(slot, sc.X - screwR * 0.65f, sc.Y - screwR * 0.35f, sc.X + screwR * 0.65f, sc.Y + screwR * 0.35f);
+            }
+        }
+        else if (style == ClockFlowStyle.Stardust)
+        {
+            // Delicate scattered pinpoint stars across the cosmic nebula card
+            for (int i = 0; i < 24; i++)
+            {
+                float hx = Hash01(i * 47 + 13);
+                float hy = Hash01(i * 83 + 29);
+                float hb = Hash01(i * 61 + 5);
+                float sx = cardRect.Left + 10f + hx * Math.Max(4f, cardRect.Width - 20f);
+                float sy = cardRect.Top + 10f + hy * Math.Max(4f, cardRect.Height - 20f);
+                float r = 0.75f + hb * 1.15f;
+                int a = (int)((light ? 55 : 115) * (0.45f + 0.55f * hb));
+                Color starCol = i % 3 == 0 ? Color.FromArgb(a, 255, 232, 175)
+                    : i % 3 == 1 ? Color.FromArgb(a, 155, 232, 255)
+                    : Color.FromArgb(a, 212, 194, 255);
+                using (var br = new SolidBrush(starCol))
+                    g.FillEllipse(br, sx - r, sy - r, r * 2f, r * 2f);
             }
         }
     }

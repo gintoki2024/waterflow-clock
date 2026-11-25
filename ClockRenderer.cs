@@ -16,7 +16,7 @@ internal sealed partial class ClockRenderer : IDisposable
     private readonly ClockFlowStyle flowStyle;
     private readonly bool isHandwritten;
     private readonly GraphicsPath[] glyphs = new GraphicsPath[10];
-    private readonly Digit[] digits = new Digit[8];
+    private readonly Digit[] digits = new Digit[10];
     private readonly float[] centers = new float[8];
     private readonly Stopwatch timer = Stopwatch.StartNew();
 
@@ -40,16 +40,21 @@ internal sealed partial class ClockRenderer : IDisposable
     private int glyphPadX, glyphPadY, glyphBmpW, glyphBmpH;
     private Color cachedPrimaryInk, cachedSecondsInk;
     private bool cachedGlyphShadow;
-    private Bitmap emberOldBmp, emberNewBmp, emberOutBmp;
-    private byte[] emberOldBuf, emberNewBuf, emberOutBuf;
-    private int emberBufW, emberBufH;
     private Font captionFont;
     private bool showingCountdown;
+    private bool showingSecondsOnly;
+    private bool lastExpired;
 
     public Size Size { get; private set; }
     public Size PresetSize { get; private set; }
     public bool IsAnimating { get; private set; }
     public bool AutoColor { get; set; }
+    public CustomBackgroundMode CustomBgMode { get; set; }
+    public int CustomBgColor { get; set; }
+    public string CustomBgImage { get; set; }
+    private CustomBackgroundMode cachedBgMode;
+    private int cachedBgColor;
+    private string cachedBgImage;
     private bool hasPalette, useDarkInk;
     private double nextSample;
     private Point sampledOrigin;
@@ -133,22 +138,25 @@ internal sealed partial class ClockRenderer : IDisposable
             }
         }
 
-        // Vertical geometry: exact 1-digit-height above + 1-digit-height center + 1-digit-height below
-        rowHeight = (float)Math.Ceiling(digitHeight * 1.08f);
-        float shadowMargin = theme == ClockTheme.PureFloating ? 12f : 20f;
-        float cardPadY = theme == ClockTheme.PureFloating ? 4f : Math.Max(10f, rowHeight * 0.14f);
-        float cardPadX = theme == ClockTheme.PureFloating ? 16f : Math.Max(28f, digitWidth * 0.65f);
+        // Sleek compact vertical geometry: minimal bottom margin + compact top band for countdown caption
+        rowHeight = (float)Math.Ceiling(digitHeight * 1.06f);
+        float shadowMargin = theme == ClockTheme.PureFloating ? 12f : 18f;
+        float cardPadY = theme == ClockTheme.PureFloating ? 4f : Math.Max(8f, rowHeight * 0.12f);
+        float cardPadX = theme == ClockTheme.PureFloating ? 16f : Math.Max(26f, digitWidth * 0.62f);
+
+        float topReserve = rowHeight * 0.44f;
+        float bottomReserve = rowHeight * 0.20f;
 
         float digitSlot = digitWidth * (isHandwritten ? 1.12f : 1.18f);
         float colonSlot = digitWidth * 0.64f;
 
         float innerWidth = digitSlot * 6f + colonSlot * 2f;
         float cardW = innerWidth + cardPadX * 2f;
-        float cardH = rowHeight * 3f + cardPadY * 2f;
+        float cardH = topReserve + rowHeight + bottomReserve + cardPadY * 2f;
 
         cardRect = new RectangleF(shadowMargin, shadowMargin, cardW, cardH);
-        cornerRadius = Math.Min(28f, cardH * 0.14f);
-        centerY = cardRect.Top + cardPadY + rowHeight * 1.5f;
+        cornerRadius = Math.Min(24f, cardH * 0.18f);
+        centerY = cardRect.Top + cardPadY + topReserve + rowHeight * 0.50f;
 
         float x = cardRect.Left + cardPadX;
         for (int i = 0; i < 8; i++)
@@ -156,8 +164,9 @@ internal sealed partial class ClockRenderer : IDisposable
             float slot = (i == 2 || i == 5) ? colonSlot : digitSlot;
             centers[i] = x + slot * 0.5f;
             x += slot;
-            digits[i] = new Digit();
         }
+        for (int i = 0; i < digits.Length; i++)
+            digits[i] = new Digit();
 
         PresetSize = new Size(
             (int)Math.Ceiling(cardW + shadowMargin * 2f),
@@ -189,24 +198,27 @@ internal sealed partial class ClockRenderer : IDisposable
         outputPixels = new byte[pixelBytes];
         digitLayer = new Bitmap(Size.Width, Size.Height, PixelFormat.Format32bppPArgb);
 
-        // Precompute smooth 1D vertical fade mask across the 3-row aperture
+        // Precompute smooth asymmetric 1D vertical fade mask fitting the compact top & bottom margins
         rowMask = new byte[Size.Height];
-        float solidHalf = rowHeight * 0.48f;
-        float fadeSpan = rowHeight * 1.00f;
+        float solidHalf = rowHeight * 0.46f;
+        float topFadeSpan = Math.Max(8f, (centerY - cardRect.Top) - solidHalf);
+        float botFadeSpan = Math.Max(8f, (cardRect.Bottom - centerY) - solidHalf);
         for (int y = 0; y < Size.Height; y++)
         {
-            float dist = Math.Abs((y + 0.5f) - centerY);
+            float dy = (y + 0.5f) - centerY;
+            float dist = Math.Abs(dy);
+            float span = dy < 0f ? topFadeSpan : botFadeSpan;
             if (dist <= solidHalf)
             {
                 rowMask[y] = 255;
             }
-            else if (dist >= solidHalf + fadeSpan)
+            else if (dist >= solidHalf + span)
             {
                 rowMask[y] = 0;
             }
             else
             {
-                double u = (dist - solidHalf) / fadeSpan;
+                double u = (dist - solidHalf) / span;
                 double vis = 0.5 * (1.0 + Math.Cos(Math.PI * Math.Pow(u, 0.88)));
                 rowMask[y] = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(vis * 255.0)));
             }
@@ -244,35 +256,43 @@ internal sealed partial class ClockRenderer : IDisposable
     public Bitmap Render(DateTime time, bool twelve, Point screenOrigin, Wallpaper wallpaper)
     {
         return RenderValues(time.ToString(twelve ? "hh:mm:ss" : "HH:mm:ss", CultureInfo.InvariantCulture),
-            time.Millisecond / 1000.0, null, screenOrigin, wallpaper);
+            time.Millisecond / 1000.0, null, screenOrigin, wallpaper, false, false);
     }
 
     internal Bitmap RenderCountdown(Countdown session, DateTime utcNow, Point origin, Wallpaper wallpaper)
     {
         long seconds = session.Remaining(utcNow);
-        return RenderValues(Countdown.Format(seconds), 0, session.Caption(seconds), origin, wallpaper, seconds == 0);
+        long ticks = Math.Max(0L, session.Deadline.Ticks - utcNow.Ticks);
+        double frac = seconds == 0 ? 0.0 : 1.0 - ((ticks % TimeSpan.TicksPerSecond) / (double)TimeSpan.TicksPerSecond);
+        return RenderValues(session.FormatDisplay(seconds), frac, session.Caption(seconds), origin, wallpaper,
+            seconds == 0, session.ShowSecondsOnly);
     }
 
-    private Bitmap RenderValues(string value, double fraction, string caption, Point screenOrigin, Wallpaper wallpaper, bool expired = false)
+    private Bitmap RenderValues(string value, double fraction, string caption, Point screenOrigin, Wallpaper wallpaper,
+        bool expired = false, bool secondsOnly = false)
     {
         EnsureBackgroundCache(screenOrigin, wallpaper);
 
         bool countdown = caption != null;
-        bool illustrated = flowStyle >= ClockFlowStyle.EmberBurn;
-        bool modeChanged = countdown != showingCountdown;
+        bool illustrated = flowStyle >= ClockFlowStyle.Stardust;
+        bool modeChanged = countdown != showingCountdown || secondsOnly != showingSecondsOnly;
         showingCountdown = countdown;
+        showingSecondsOnly = secondsOnly;
+        lastExpired = expired;
         double now = timer.Elapsed.TotalMilliseconds;
         if (AutoColor) UpdatePalette(screenOrigin, wallpaper, now);
         else hasPalette = false;
 
-        // Effect #4: Detect changes from right to left and assign staggered cascade wave delays
+        int count = Math.Min(digits.Length, value.Length);
+
+        // Detect changes from right to left and assign staggered cascade wave delays (works for BOTH clock & countdown!)
         int cascadeRank = 0;
-        for (int index = 7; index >= 0; index--)
+        for (int index = count - 1; index >= 0; index--)
         {
-            if (index == 2 || index == 5) continue;
+            if (!secondsOnly && (index == 2 || index == 5)) continue;
             Digit digit = digits[index];
             char targetChar = value[index];
-            if (digit.Value == 0 || (countdown && !illustrated) || expired || modeChanged)
+            if (digit.Value == 0 || expired || modeChanged)
             {
                 digit.Value = targetChar;
                 digit.OldValue = '\0';
@@ -282,7 +302,7 @@ internal sealed partial class ClockRenderer : IDisposable
             {
                 digit.OldValue = digit.Value;
                 digit.Value = targetChar;
-                if (flowStyle == ClockFlowStyle.LiquidStream && index == 7)
+                if (!countdown && flowStyle == ClockFlowStyle.LiquidStream && index == 7)
                 {
                     digit.Changed = now;
                 }
@@ -292,6 +312,12 @@ internal sealed partial class ClockRenderer : IDisposable
                     cascadeRank++;
                 }
             }
+        }
+        // Reset unused tail slots when switching between lengths in secondsOnly mode
+        for (int index = count; index < digits.Length; index++)
+        {
+            digits[index].Value = '\0';
+            digits[index].OldValue = '\0';
         }
 
         using (Graphics g = Graphics.FromImage(digitLayer))
@@ -303,26 +329,45 @@ internal sealed partial class ClockRenderer : IDisposable
             Color primaryColor = GetPrimaryDigitColor();
             Color secondsColor = GetSecondsDigitColor();
             Color colonColor = GetColonColor();
-            bool drawDropShadow = (theme == ClockTheme.PureFloating);
+            bool drawDropShadow = (theme == ClockTheme.PureFloating && CustomBgMode == CustomBackgroundMode.Default);
             bool enableShimmer = true;
 
-            // Smooth breathing colon synced to each second
             double phase = fraction * Math.PI * 2.0;
             float colonAlpha = illustrated ? .85f : (float)(0.52 + 0.43 * (0.5 + 0.5 * Math.Cos(phase)));
-            bool anyAnimating = (!countdown && flowStyle == ClockFlowStyle.LiquidStream);
+            bool anyAnimating = (!expired && !countdown && flowStyle == ClockFlowStyle.LiquidStream);
 
-            for (int index = 0; index < 8; index++)
+            // Compute dynamic slot X positions & scale when in pure-seconds countdown mode
+            float secFitScale = 1.0f;
+            float[] slotX = centers;
+            if (secondsOnly)
             {
-                if (index == 2 || index == 5)
+                slotX = new float[count];
+                float availW = cardRect.Width - Math.Max(28f, digitWidth * 0.7f);
+                float baseSlot = digitWidth * (isHandwritten ? 1.12f : 1.18f);
+                float totalW = baseSlot * count;
+                if (totalW > availW && totalW > 1f)
                 {
-                    PaintColon(g, centers[index], centerY, colonColor, colonAlpha, drawDropShadow);
+                    secFitScale = availW / totalW;
+                    baseSlot *= secFitScale;
+                    totalW = availW;
+                }
+                float startX = cardRect.Left + (cardRect.Width - totalW) * 0.5f;
+                for (int i = 0; i < count; i++)
+                    slotX[i] = startX + baseSlot * (i + 0.5f);
+            }
+
+            for (int index = 0; index < count; index++)
+            {
+                if (!secondsOnly && (index == 2 || index == 5))
+                {
+                    PaintColon(g, slotX[index], centerY, colonColor, colonAlpha, drawDropShadow);
                     continue;
                 }
 
-                Color ink = (index >= 6) ? secondsColor : primaryColor;
-                float x = centers[index];
+                Color ink = (!secondsOnly && index >= 6) || (secondsOnly && index == count - 1) ? secondsColor : primaryColor;
+                float x = slotX[index];
 
-                // Effect #1: Continuous liquid stream on seconds ones-digit in LiquidStream mode
+                // Continuous liquid stream on seconds ones-digit in normal clock LiquidStream mode
                 if (!countdown && flowStyle == ClockFlowStyle.LiquidStream && index == 7)
                 {
                     RenderContinuousSecondsStream(g, value[7] - '0', fraction, x, ink, drawDropShadow);
@@ -336,18 +381,29 @@ internal sealed partial class ClockRenderer : IDisposable
                 if (illustrated)
                 {
                     double dur = flowStyle == ClockFlowStyle.SplitFlap ? 640.0
-                        : flowStyle == ClockFlowStyle.IceShards ? 880.0 : 860.0;
-                    if (digit.OldValue != 0 && elapsed < dur + 32.0) anyAnimating = true;
-                    PaintTransition(g, digit, x, ink, elapsed);
+                        : flowStyle == ClockFlowStyle.IceShards ? 880.0 : 820.0;
+                    if (!expired && digit.OldValue != 0 && elapsed < dur + 32.0) anyAnimating = true;
+                    if (secFitScale < 0.99f)
+                    {
+                        GraphicsState sc = g.Save();
+                        g.TranslateTransform(x, centerY);
+                        g.ScaleTransform(secFitScale, secFitScale);
+                        g.TranslateTransform(-x, -centerY);
+                        PaintTransition(g, digit, x, ink, elapsed);
+                        g.Restore(sc);
+                    }
+                    else
+                    {
+                        PaintTransition(g, digit, x, ink, elapsed);
+                    }
                     continue;
                 }
 
-                if (digit.OldValue != 0 && elapsed < Duration + ShimmerTailMs + 32.0) anyAnimating = true;
+                if (!expired && digit.OldValue != 0 && elapsed < Duration + ShimmerTailMs + 32.0) anyAnimating = true;
 
-                // Waiting for right-to-left cascade stagger
                 if (digit.OldValue != 0 && elapsed < 0)
                 {
-                    PaintDigit(g, digit.OldValue, x, centerY, 1.0f, 1.0f, ink, 1.0f, drawDropShadow, -1f);
+                    PaintDigit(g, digit.OldValue, x, centerY, secFitScale, secFitScale, ink, 1.0f, drawDropShadow, -1f);
                     continue;
                 }
 
@@ -358,27 +414,24 @@ internal sealed partial class ClockRenderer : IDisposable
                     float ease = ComputeEase(t);
                     float travel = rowHeight * 1.08f;
 
-                    // Departing digit glides UP into top reserved space
                     float oldY = centerY - travel * ease;
                     float oldSx, oldSy;
                     ComputePerspective(oldY, out oldSx, out oldSy);
                     float oldAlpha = (float)Math.Pow(1.0 - ease, 0.52);
-                    PaintDigit(g, digit.OldValue, x, oldY, oldSx, oldSy, ink, oldAlpha, drawDropShadow, -1f);
+                    PaintDigit(g, digit.OldValue, x, oldY, oldSx * secFitScale, oldSy * secFitScale, ink, oldAlpha, drawDropShadow, -1f);
 
-                    // Arriving digit rises UP from bottom reserved space into center
                     float newY = centerY + travel * (1.0f - ease);
                     float newSx, newSy;
                     ComputePerspective(newY, out newSx, out newSy);
                     float newAlpha = (float)Math.Pow(ease, 0.44);
 
-                    // Arrival specular shimmer starting in the final 30% of glide
                     float shimmer = enableShimmer ? ComputeShimmerProgress(elapsed) : -1f;
-                    PaintDigit(g, digit.Value, x, newY, newSx, newSy, ink, newAlpha, drawDropShadow, shimmer);
+                    PaintDigit(g, digit.Value, x, newY, newSx * secFitScale, newSy * secFitScale, ink, newAlpha, drawDropShadow, shimmer);
                 }
                 else
                 {
                     float shimmer = (enableShimmer && digit.OldValue != 0) ? ComputeShimmerProgress(elapsed) : -1f;
-                    PaintDigit(g, digit.Value, x, centerY, 1.0f, 1.0f, ink, 1.0f, drawDropShadow, shimmer);
+                    PaintDigit(g, digit.Value, x, centerY, secFitScale, secFitScale, ink, 1.0f, drawDropShadow, shimmer);
                 }
             }
             IsAnimating = anyAnimating && !expired;
@@ -417,9 +470,10 @@ internal sealed partial class ClockRenderer : IDisposable
     private void PaintCaption(Bitmap frame, string text)
     {
         if (captionFont == null)
-            captionFont = new Font("Microsoft YaHei UI", Math.Max(10f, rowHeight * .30f), FontStyle.Regular, GraphicsUnit.Pixel);
-        var bounds = new RectangleF(cardRect.Left + digitWidth * .25f, centerY - rowHeight * 1.40f,
-            cardRect.Width - digitWidth * .50f, rowHeight * .78f);
+            captionFont = new Font("Microsoft YaHei UI", Math.Max(10f, rowHeight * .26f), FontStyle.Regular, GraphicsUnit.Pixel);
+        float topBandH = Math.Max(14f, (centerY - rowHeight * 0.50f) - cardRect.Top);
+        var bounds = new RectangleF(cardRect.Left + digitWidth * .25f, cardRect.Top + topBandH * 0.10f,
+            cardRect.Width - digitWidth * .50f, topBandH * 0.90f);
         using (var g = Graphics.FromImage(frame))
         using (var format = new StringFormat(StringFormatFlags.NoWrap))
         using (var ink = new SolidBrush(GetPrimaryDigitColor()))
@@ -428,7 +482,7 @@ internal sealed partial class ClockRenderer : IDisposable
             format.Alignment = StringAlignment.Center;
             format.LineAlignment = StringAlignment.Center;
             format.Trimming = StringTrimming.EllipsisCharacter;
-            if (theme == ClockTheme.PureFloating)
+            if (theme == ClockTheme.PureFloating && CustomBgMode == CustomBackgroundMode.Default)
             {
                 var shadow = bounds;
                 shadow.Offset(0, Math.Max(1f, rowHeight * .025f));
@@ -525,7 +579,7 @@ internal sealed partial class ClockRenderer : IDisposable
     {
         int w = Size.Width;
         int h = Size.Height;
-        bool useLiquidOptics = !showingCountdown && flowStyle == ClockFlowStyle.LiquidStream;
+        bool useLiquidOptics = !lastExpired && flowStyle == ClockFlowStyle.LiquidStream;
         float tSec = (float)(nowMs * 0.001);
 
         if (cachedBgPixels == null)
@@ -1051,16 +1105,21 @@ internal sealed partial class ClockRenderer : IDisposable
 
     private void EnsureBackgroundCache(Point origin, Wallpaper wallpaper)
     {
-        if (theme == ClockTheme.PureFloating)
+        if (theme == ClockTheme.PureFloating && CustomBgMode == CustomBackgroundMode.Default)
         {
             cachedBgPixels = null;
             return;
         }
-        if (cachedBgPixels != null && cachedOrigin == origin && cachedWallpaperVersion == wallpaper.Version)
+        if (cachedBgPixels != null && cachedOrigin == origin && cachedWallpaperVersion == wallpaper.Version &&
+            cachedBgMode == CustomBgMode && cachedBgColor == CustomBgColor &&
+            string.Equals(cachedBgImage ?? "", CustomBgImage ?? "", StringComparison.OrdinalIgnoreCase))
             return;
 
         cachedOrigin = origin;
         cachedWallpaperVersion = wallpaper.Version;
+        cachedBgMode = CustomBgMode;
+        cachedBgColor = CustomBgColor;
+        cachedBgImage = CustomBgImage ?? "";
         cachedBgPixels = BuildFrostedBackground(origin, wallpaper);
     }
 
@@ -1137,6 +1196,40 @@ internal sealed partial class ClockRenderer : IDisposable
                 break;
         }
 
+        // Optional custom background image sampled directly onto the rounded card
+        byte[] customImgPixels = null;
+        if (CustomBgMode == CustomBackgroundMode.Image && !string.IsNullOrEmpty(CustomBgImage) && System.IO.File.Exists(CustomBgImage))
+        {
+            try
+            {
+                using (Image raw = Image.FromFile(CustomBgImage))
+                using (Bitmap fitted = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+                {
+                    using (Graphics ig = Graphics.FromImage(fitted))
+                    {
+                        ig.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        ig.SmoothingMode = SmoothingMode.HighQuality;
+                        float sx = cardRect.Width / Math.Max(1, raw.Width);
+                        float sy = cardRect.Height / Math.Max(1, raw.Height);
+                        float sc = Math.Max(sx, sy);
+                        float dw = raw.Width * sc;
+                        float dh = raw.Height * sc;
+                        float dx = cardRect.Left + (cardRect.Width - dw) * 0.5f;
+                        float dy = cardRect.Top + (cardRect.Height - dh) * 0.5f;
+                        ig.DrawImage(raw, new RectangleF(dx, dy, dw, dh));
+                    }
+                    customImgPixels = new byte[w * h * 4];
+                    BitmapData id = fitted.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                    try { Marshal.Copy(id.Scan0, customImgPixels, 0, customImgPixels.Length); }
+                    finally { fitted.UnlockBits(id); }
+                }
+            }
+            catch { customImgPixels = null; }
+        }
+
+        Color customSolid = Color.FromArgb(CustomBgColor);
+        bool useCustomSolid = (CustomBgMode == CustomBackgroundMode.SolidColor);
+
         for (int y = 0; y < h; y++)
         {
             double relY = Math.Max(0.0, Math.Min(1.0, (y - cardRect.Top) / Math.Max(1f, cardRect.Height)));
@@ -1148,15 +1241,32 @@ internal sealed partial class ClockRenderer : IDisposable
                 int cov = maskPixels[idx + 3];
                 if (cov == 0) continue;
 
-                Color wp = wallpaper.Sample(origin.X + x, origin.Y + y);
-                double r = Math.Min(255.0, wp.R * (1.0 - veilMix) + veilR * veilMix + sheen);
-                double g = Math.Min(255.0, wp.G * (1.0 - veilMix) + veilG * veilMix + sheen);
-                double b = Math.Min(255.0, wp.B * (1.0 - veilMix) + veilB * veilMix + sheen * 1.1);
+                double r, g, b;
+                double effectiveAlpha = cardAlpha;
+                if (customImgPixels != null)
+                {
+                    b = Math.Min(255.0, customImgPixels[idx] + sheen * 0.45);
+                    g = Math.Min(255.0, customImgPixels[idx + 1] + sheen * 0.45);
+                    r = Math.Min(255.0, customImgPixels[idx + 2] + sheen * 0.45);
+                    effectiveAlpha = 0.94;
+                }
+                else if (useCustomSolid)
+                {
+                    r = Math.Min(255.0, customSolid.R + sheen * 0.65);
+                    g = Math.Min(255.0, customSolid.G + sheen * 0.65);
+                    b = Math.Min(255.0, customSolid.B + sheen * 0.65);
+                    effectiveAlpha = Math.Max(0.25, customSolid.A / 255.0);
+                }
+                else
+                {
+                    Color wp = wallpaper.Sample(origin.X + x, origin.Y + y);
+                    r = Math.Min(255.0, wp.R * (1.0 - veilMix) + veilR * veilMix + sheen);
+                    g = Math.Min(255.0, wp.G * (1.0 - veilMix) + veilG * veilMix + sheen);
+                    b = Math.Min(255.0, wp.B * (1.0 - veilMix) + veilB * veilMix + sheen * 1.1);
+                    EffectProcedural.ApplySceneSurfacePixel(flowStyle, theme, x, y, cardRect, ref r, ref g, ref b);
+                }
 
-                // Overlay dedicated high-realism material surface for the active effect
-                EffectProcedural.ApplySceneSurfacePixel(flowStyle, theme, x, y, cardRect, ref r, ref g, ref b);
-
-                int sa = (int)Math.Round(cov * cardAlpha);
+                int sa = (int)Math.Round(cov * effectiveAlpha);
                 int sr = (int)Math.Round(r * sa / 255.0);
                 int sg = (int)Math.Round(g * sa / 255.0);
                 int sb = (int)Math.Round(b * sa / 255.0);
@@ -1265,9 +1375,6 @@ internal sealed partial class ClockRenderer : IDisposable
     {
         DisposeGlyphCache();
         if (captionFont != null) captionFont.Dispose();
-        if (emberOldBmp != null) emberOldBmp.Dispose();
-        if (emberNewBmp != null) emberNewBmp.Dispose();
-        if (emberOutBmp != null) emberOutBmp.Dispose();
         digitLayer.Dispose();
         foreach (GraphicsPath path in glyphs)
             if (path != null) path.Dispose();

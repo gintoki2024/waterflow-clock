@@ -60,7 +60,7 @@ internal static class ClockSmoke
     {
         var before = new DateTime(2025, 1, 1, 12, 34, 58, DateTimeKind.Utc);
         var session = Countdown.Start("Test", 18, before);
-        foreach (ClockFlowStyle style in new[] { ClockFlowStyle.EmberBurn, ClockFlowStyle.IceShards, ClockFlowStyle.SplitFlap })
+        foreach (ClockFlowStyle style in new[] { ClockFlowStyle.Stardust, ClockFlowStyle.IceShards, ClockFlowStyle.SplitFlap })
         foreach (bool countdown in new[] { false, true })
         {
             if (!Enum.IsDefined(typeof(ClockFlowStyle), style))
@@ -85,7 +85,7 @@ internal static class ClockSmoke
                             var ones = new Rectangle(cut, 0, initial.Width - cut, initial.Height);
                             var fixedDigits = new Rectangle(0, 0, initial.Width * 3 / 4, initial.Height);
                             if (!HasEffectColor(style == ClockFlowStyle.SplitFlap ? settled : moving, ones, style))
-                                throw new Exception("Missing ember, ice tint or flap hinge: " + style);
+                                throw new Exception("Missing stardust, ice tint or flap hinge: " + style);
                             if (ChangedPixels(initial, moving, ones) < 10 || ChangedPixels(moving, settled, ones) < 10 ||
                                 ChangedPixels(initial, settled, ones) < 10 || ChangedPixels(initial, moving, fixedDigits) != 0 ||
                                 !Same(Pixels(settled), Pixels(repeated)))
@@ -105,9 +105,9 @@ internal static class ClockSmoke
             {
                 Color c = frame.GetPixel(x, y);
                 if (c.A < 45) continue;
-                if ((style == ClockFlowStyle.EmberBurn && c.R - c.B > 45) ||
+                if ((style == ClockFlowStyle.Stardust && (Math.Abs(c.R - c.B) > 25 || Math.Abs(c.G - c.B) > 25)) ||
                     (style == ClockFlowStyle.IceShards && c.B - c.R > 40) ||
-                    (style == ClockFlowStyle.SplitFlap && Math.Abs(y - frame.Height / 2) <= 2 &&
+                    (style == ClockFlowStyle.SplitFlap && Math.Abs(y - frame.Height * 0.57) <= 6 &&
                      c.A >= 150 && c.R < 160 && c.B < 180))
                     hits++;
             }
@@ -127,27 +127,28 @@ internal static class ClockSmoke
     {
         DateTime now = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var eastern = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-        DateTime local = new DateTime(2125, 6, 7, 18, 30, 13);
-        var target = Countdown.Until("长期目标", local, eastern, now, null);
+        DateTime local = new DateTime(2030, 6, 7, 18, 30, 13);
+        var target = Countdown.Until("长期目标", local, eastern, now, null, true);
         var restored = Countdown.Restore(target.WithVisibility(false).Store());
-        if (restored == null || !restored.IsTarget || restored.Visible ||
+        if (restored == null || !restored.IsTarget || restored.Visible || !restored.ShowSecondsOnly ||
             TimeZoneInfo.ConvertTimeFromUtc(restored.Deadline, eastern) != local || restored.Deadline != target.Deadline ||
-            restored.Remaining(now) <= int.MaxValue || restored.Remaining(target.Deadline.AddTicks(-1)) != 1)
-            throw new Exception("Target instant, long duration or visibility failed to round-trip.");
-        if (Countdown.Format(360000) != "04:00:00" || target.Caption(360000) != "4 天 · 长期目标" ||
-            Countdown.Format(359999) != "99:59:59" || target.Caption(359999) != target.Name ||
+            restored.Remaining(now) <= 0 || restored.Remaining(target.Deadline.AddTicks(-1)) != 1)
+            throw new Exception("Target instant, seconds mode or visibility failed to round-trip.");
+        if (Countdown.Format(360000) != "04:00:00" || target.FormatDisplay(360000) != "360000" ||
+            Countdown.Format(359999) != "99:59:59" ||
             Countdown.Format(24L * 3600 * 50000 + 3661) != "01:01:01")
             throw new Exception("Day and hour countdown display failed at the 100-hour boundary.");
         string[] old = { "旧倒计时", "300", now.AddMinutes(5).Ticks.ToString(System.Globalization.CultureInfo.InvariantCulture), "1" };
         var migrated = Countdown.Restore(old);
-        if (migrated == null || migrated.IsTarget || migrated.Remaining(now) != 300 || !migrated.Visible)
+        if (migrated == null || migrated.IsTarget || migrated.ShowSecondsOnly || migrated.Remaining(now) != 300 || !migrated.Visible)
             throw new Exception("Legacy duration record failed to load.");
         DateTime ambiguous = new DateTime(2025, 11, 2, 1, 30, 0);
-        foreach (DateTime invalid in new[] { new DateTime(2024, 1, 1), new DateTime(2025, 3, 9, 2, 30, 0), ambiguous })
+        // Reject past, >10 years in the future, skipped DST, and ambiguous DST
+        foreach (DateTime invalid in new[] { new DateTime(2024, 1, 1), new DateTime(2040, 1, 1), new DateTime(2025, 3, 9, 2, 30, 0), ambiguous })
         {
             try { Countdown.Until("test", invalid, eastern, now, null); }
             catch (ArgumentException) { continue; }
-            throw new Exception("Accepted a past, skipped or ambiguous local time.");
+            throw new Exception("Accepted a past, over-10-year, skipped or ambiguous local time.");
         }
         // An existing absolute target can fall within a repeated hour after a timezone change.
         var firstOccurrence = Countdown.Until("test", new DateTime(2025, 11, 2, 5, 30, 0), TimeZoneInfo.Utc, now, null);

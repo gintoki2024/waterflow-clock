@@ -111,6 +111,12 @@ internal sealed class ClockWindow : Form
         }
         menu.Items.Add(flowMenu);
 
+        ToolStripMenuItem bgMenu = new ToolStripMenuItem("自定义背景");
+        bgMenu.DropDownItems.Add("选择背景颜色…", null, delegate { PickCustomBgColor(); });
+        bgMenu.DropDownItems.Add("选择背景图片…", null, delegate { PickCustomBgImage(); });
+        bgMenu.DropDownItems.Add("恢复默认背景", null, delegate { ResetCustomBg(); });
+        menu.Items.Add(bgMenu);
+
         topMostItem = new ToolStripMenuItem("始终置顶");
         topMostItem.Click += delegate { ToggleTopMost(); };
         menu.Items.Add(topMostItem);
@@ -127,7 +133,8 @@ internal sealed class ClockWindow : Form
         menu.Items.Add("退出", null, delegate { Close(); });
         SyncMenuChecks();
 
-        trayIcon = CreateTrayIcon();
+        trayIcon = LoadAppIcon();
+        Icon = trayIcon;
         tray = new NotifyIcon
         {
             Text = "水流时钟 · 双击设置",
@@ -218,11 +225,56 @@ internal sealed class ClockWindow : Form
         SyncMenuChecks();
     }
 
+    void PickCustomBgColor()
+    {
+        using (var dlg = new ColorDialog { Color = Color.FromArgb(options.CustomBgColor), FullOpen = true })
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            options.CustomBgMode = CustomBackgroundMode.SolidColor;
+            options.CustomBgColor = Color.FromArgb(228, dlg.Color.R, dlg.Color.G, dlg.Color.B).ToArgb();
+            options.Save();
+            renderer.CustomBgMode = options.CustomBgMode;
+            renderer.CustomBgColor = options.CustomBgColor;
+            DrawFrame(true);
+        }
+    }
+
+    void PickCustomBgImage()
+    {
+        using (var dlg = new OpenFileDialog
+        {
+            Title = "选择时钟背景图片",
+            Filter = "图片文件|*.png;*.jpg;*.jpeg;*.bmp;*.webp|所有文件|*.*"
+        })
+        {
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            options.CustomBgMode = CustomBackgroundMode.Image;
+            options.CustomBgImage = dlg.FileName;
+            options.Save();
+            renderer.CustomBgMode = options.CustomBgMode;
+            renderer.CustomBgImage = options.CustomBgImage;
+            DrawFrame(true);
+        }
+    }
+
+    void ResetCustomBg()
+    {
+        options.CustomBgMode = CustomBackgroundMode.Default;
+        options.CustomBgImage = "";
+        options.Save();
+        renderer.CustomBgMode = options.CustomBgMode;
+        renderer.CustomBgImage = "";
+        DrawFrame(true);
+    }
+
     ClockRenderer CreateRenderer()
     {
         return new ClockRenderer(options.FontName, options.Theme, options.Scale, options.FlowStyle, options.Zoom)
         {
-            AutoColor = options.AutoColor
+            AutoColor = options.AutoColor,
+            CustomBgMode = options.CustomBgMode,
+            CustomBgColor = options.CustomBgColor,
+            CustomBgImage = options.CustomBgImage
         };
     }
 
@@ -440,6 +492,17 @@ internal sealed class ClockWindow : Form
 
     [DllImport("user32.dll", SetLastError = true)]
     static extern bool DestroyIcon(IntPtr handle);
+
+    static Icon LoadAppIcon()
+    {
+        try
+        {
+            Icon embedded = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            if (embedded != null) return embedded;
+        }
+        catch { }
+        return CreateTrayIcon();
+    }
 
     static Icon CreateTrayIcon()
     {

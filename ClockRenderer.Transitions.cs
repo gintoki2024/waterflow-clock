@@ -11,7 +11,7 @@ internal sealed partial class ClockRenderer
     {
         double duration = flowStyle == ClockFlowStyle.SplitFlap ? 640.0
             : flowStyle == ClockFlowStyle.IceShards ? 880.0
-            : 860.0;
+            : 820.0;
 
         float t = digit.OldValue == 0 ? 1f : (float)Math.Max(0.0, Math.Min(1.0, elapsed / duration));
         GraphicsState state = g.Save();
@@ -21,9 +21,8 @@ internal sealed partial class ClockRenderer
             float w = digitWidth * 1.12f;
             float h = digitHeight * 1.12f;
 
-            // Keep effects strictly inside the changing column horizontally so adjacent fixed digits are never touched,
-            // while allowing generous vertical travel into the upper/lower reserved zones.
-            g.SetClip(new RectangleF(-w * 0.54f, -h * 1.32f, w * 1.08f, h * 2.64f), CombineMode.Intersect);
+            // Keep effects strictly inside the changing column and within the compact card vertical bounds.
+            g.SetClip(new RectangleF(-w * 0.54f, -h * 0.92f, w * 1.08f, h * 1.66f), CombineMode.Intersect);
 
             GraphicsPath next = glyphs[digit.Value - '0'];
             GraphicsPath previous = digit.OldValue == 0 ? next : glyphs[digit.OldValue - '0'];
@@ -37,9 +36,9 @@ internal sealed partial class ClockRenderer
             {
                 PaintRestingGlyph(g, t <= 0f ? previous : next, ink);
             }
-            else if (flowStyle == ClockFlowStyle.EmberBurn)
+            else if (flowStyle == ClockFlowStyle.Stardust)
             {
-                PaintEmberFbm(g, previous, next, ink, w, h, t, seed);
+                PaintStardust(g, previous, next, ink, w, h, t, seed);
             }
             else
             {
@@ -88,249 +87,144 @@ internal sealed partial class ClockRenderer
     }
 
     // =========================================================================
-    // 1. EMBER BURN: High-compute per-pixel 2D FBM noise erosion, 5-stage blackbody
-    //    radiation (ink -> char -> crimson -> blaze orange -> white-gold core),
-    //    dynamic obsidian firelight bloom, heat haze, and 38 turbulent ember + ash particles.
+    // 1. STARDUST: Diagonal cosmic dissolve wave, aurora starlight sheen, and
+    //    44 luminous stardust particles & 4-point star glints drifting on a cosmic breeze.
     // =========================================================================
-    private void PaintEmberFbm(Graphics g, GraphicsPath oldFace, GraphicsPath next, Color ink,
+    private void PaintStardust(Graphics g, GraphicsPath oldFace, GraphicsPath next, Color ink,
         float w, float h, float t, int seed)
     {
         bool lightTheme = ink.GetBrightness() < 0.5f;
-        float energy = (float)Math.Pow(Math.Sin(t * Math.PI), 0.70);
-        float burnProgress = -0.18f + 1.38f * (t * t * (3f - 2f * t));
+        float p = t * t * (3f - 2f * t);
+        float energy = (float)Math.Sin(t * Math.PI);
 
-        // 1. Dynamic warm firelight glow cast onto the background behind the burning column
-        if (theme != ClockTheme.PureFloating && !lightTheme && energy > 0.04f)
+        Color starGold = lightTheme ? Color.FromArgb(255, 198, 138, 36) : Color.FromArgb(255, 255, 232, 166);
+        Color starCyan = lightTheme ? Color.FromArgb(255, 42, 146, 196) : Color.FromArgb(255, 142, 234, 255);
+        Color starViolet = lightTheme ? Color.FromArgb(255, 128, 92, 210) : Color.FromArgb(255, 202, 178, 255);
+
+        // Diagonal dissolve frontier sweeping from bottom-left to top-right
+        float frontY = h * (0.64f - 1.28f * p);
+        float slant = h * 0.22f;
+
+        // 1. Soft cosmic aura bloom behind the active dissolve wave
+        if (theme != ClockTheme.PureFloating && energy > 0.05f)
         {
-            float frontY = h * (0.58f - 1.16f * (t * t * (3f - 2f * t)));
-            float glowR = Math.Max(w * 0.52f, h * 0.58f);
+            float gr = Math.Max(w * 0.52f, h * 0.56f);
             using (var gp = new GraphicsPath())
             {
-                gp.AddEllipse(-glowR, frontY - glowR * 0.85f, glowR * 2f, glowR * 1.7f);
+                gp.AddEllipse(-gr, frontY - gr * 0.8f, gr * 2f, gr * 1.6f);
                 using (var pgb = new PathGradientBrush(gp))
                 {
-                    pgb.CenterColor = Color.FromArgb((int)(92 * energy), 255, 92, 18);
-                    pgb.SurroundColors = new[] { Color.FromArgb(0, 255, 60, 10) };
+                    pgb.CenterColor = Color.FromArgb((int)((lightTheme ? 40 : 68) * energy), starViolet);
+                    pgb.SurroundColors = new[] { Color.FromArgb(0, starCyan) };
                     g.FillPath(pgb, gp);
                 }
             }
         }
 
-        // 2. Per-pixel 2D FBM noise erosion of oldFace & molten forging reveal of next (reusing scratch buffers!)
-        int bw = Math.Max(16, (int)Math.Ceiling(w * 1.06f));
-        int bh = Math.Max(20, (int)Math.Ceiling(h * 1.24f));
-        float cx = bw * 0.5f;
-        float cy = bh * 0.5f;
-
-        if (emberOldBmp == null || emberBufW != bw || emberBufH != bh)
+        // 2. Departing glyph dissolving smoothly above the diagonal stardust frontier
+        float oldAlpha = (float)Math.Pow(1f - t, 0.72);
+        if (oldAlpha > 0.02f)
         {
-            if (emberOldBmp != null) emberOldBmp.Dispose();
-            if (emberNewBmp != null) emberNewBmp.Dispose();
-            if (emberOutBmp != null) emberOutBmp.Dispose();
-            emberOldBmp = new Bitmap(bw, bh, PixelFormat.Format32bppArgb);
-            emberNewBmp = new Bitmap(bw, bh, PixelFormat.Format32bppArgb);
-            emberOutBmp = new Bitmap(bw, bh, PixelFormat.Format32bppArgb);
-            emberOldBuf = new byte[bw * bh * 4];
-            emberNewBuf = new byte[bw * bh * 4];
-            emberOutBuf = new byte[bw * bh * 4];
-            emberBufW = bw;
-            emberBufH = bh;
-        }
-
-        using (var og = Graphics.FromImage(emberOldBmp))
-        {
-            og.Clear(Color.Transparent);
-            og.SmoothingMode = SmoothingMode.HighQuality;
-            og.TranslateTransform(cx, cy);
-            FillGlyph(og, oldFace, Color.White);
-        }
-        using (var ng = Graphics.FromImage(emberNewBmp))
-        {
-            ng.Clear(Color.Transparent);
-            ng.SmoothingMode = SmoothingMode.HighQuality;
-            ng.TranslateTransform(cx, cy);
-            FillGlyph(ng, next, Color.White);
-        }
-
-        Rectangle rect = new Rectangle(0, 0, bw, bh);
-        byte[] oldBuf = emberOldBuf;
-        byte[] newBuf = emberNewBuf;
-        byte[] outBuf = emberOutBuf;
-        Array.Clear(outBuf, 0, outBuf.Length);
-
-        BitmapData oData = emberOldBmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        BitmapData nData = emberNewBmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        try
-        {
-            Marshal.Copy(oData.Scan0, oldBuf, 0, oldBuf.Length);
-            Marshal.Copy(nData.Scan0, newBuf, 0, newBuf.Length);
-        }
-        finally
-        {
-            emberOldBmp.UnlockBits(oData);
-            emberNewBmp.UnlockBits(nData);
-        }
-
-        float noiseScale = 44f / Math.Max(28f, h);
-        float seedOffX = (seed * 13.7f) % 97f;
-        float seedOffY = (seed * 23.3f) % 89f;
-        float timeFlow = t * 11.5f;
-        float heatResidual = (float)Math.Pow(1f - t, 1.45) * 0.52f;
-
-        for (int py = 0; py < bh; py++)
-        {
-            float v = 1f - (py / (float)bh);
-            bool nearFront = Math.Abs(v - burnProgress) < 0.42f;
-            int rowOff = py * bw * 4;
-
-            for (int px = 0; px < bw; px++)
+            GraphicsState os = g.Save();
+            try
             {
-                int idx = rowOff + (px << 2);
-                int oa = oldBuf[idx + 3];
-                int na = newBuf[idx + 3];
-                if (oa == 0 && na == 0) continue;
-
-                float d;
-                if (nearFront)
+                using (var upperClip = new GraphicsPath())
                 {
-                    float n = EffectProcedural.SampleFbm(px * noiseScale + seedOffX, py * noiseScale - timeFlow + seedOffY);
-                    float fine = EffectProcedural.SampleRidge(px * noiseScale * 1.9f - seedOffY, py * noiseScale * 1.9f - timeFlow * 1.6f);
-                    d = (v + (n - 0.5f) * 0.30f + (fine - 0.5f) * 0.14f) - burnProgress;
+                    upperClip.AddPolygon(new[]
+                    {
+                        new PointF(-w * 0.55f, frontY + slant),
+                        new PointF(w * 0.55f, frontY - slant),
+                        new PointF(w * 0.55f, -h * 1.28f),
+                        new PointF(-w * 0.55f, -h * 1.28f)
+                    });
+                    g.SetClip(upperClip, CombineMode.Intersect);
+                }
+                g.TranslateTransform(w * 0.04f * t, -h * 0.08f * t);
+                FillGlyph(g, oldFace, MixInk(ink, starViolet, t * 0.55f, oldAlpha));
+
+                // Luminous aurora edge right along the dissolving frontier
+                g.SetClip(oldFace, CombineMode.Intersect);
+                using (var rim = new Pen(Color.FromArgb((int)(210 * energy), starGold), Math.Max(2.2f, h * 0.085f)))
+                    g.DrawLine(rim, -w * 0.55f, frontY + slant, w * 0.55f, frontY - slant);
+            }
+            finally { g.Restore(os); }
+        }
+
+        // 3. Incoming glyph coalescing from stardust below the frontier
+        float newAlpha = (float)Math.Pow(t, 0.62);
+        if (newAlpha > 0.02f)
+        {
+            GraphicsState ns = g.Save();
+            try
+            {
+                using (var lowerClip = new GraphicsPath())
+                {
+                    lowerClip.AddPolygon(new[]
+                    {
+                        new PointF(-w * 0.55f, frontY + slant),
+                        new PointF(w * 0.55f, frontY - slant),
+                        new PointF(w * 0.55f, h * 1.28f),
+                        new PointF(-w * 0.55f, h * 1.28f)
+                    });
+                    g.SetClip(lowerClip, CombineMode.Intersect);
+                }
+                float inv = 1f - t;
+                g.TranslateTransform(0f, h * 0.05f * inv * inv);
+                FillGlyph(g, next, MixInk(ink, starCyan, inv * 0.42f, newAlpha));
+
+                g.SetClip(next, CombineMode.Intersect);
+                using (var rim = new Pen(Color.FromArgb((int)(195 * energy), starCyan), Math.Max(2.0f, h * 0.075f)))
+                    g.DrawLine(rim, -w * 0.55f, frontY + slant, w * 0.55f, frontY - slant);
+            }
+            finally { g.Restore(ns); }
+        }
+
+        // 4. 44 luminous stardust particles & 4-point star-glint sparkles drifting upward
+        if (energy > 0.03f)
+        {
+            for (int j = 0; j < 44; j++)
+            {
+                float h1 = EffectProcedural.Hash01(seed * 17 + j * 41);
+                float h2 = EffectProcedural.Hash01(seed * 29 + j * 67);
+                float h3 = EffectProcedural.Hash01(seed * 13 + j * 97);
+
+                float phase = (t * (1.20f + h2 * 1.05f) + h1 * 0.88f) % 1f;
+                float life = energy * (float)Math.Sin(phase * Math.PI);
+                if (life <= 0.04f) continue;
+
+                float ux = h1 - 0.5f;
+                float baseY = frontY - ux * slant * 2f + (h2 - 0.5f) * h * 0.16f;
+                float driftX = w * (0.06f + 0.14f * h3) * phase + (float)Math.Sin(phase * 6.0f + j) * w * 0.035f;
+                float riseY = h * (0.04f + (0.36f + 0.40f * h2) * phase);
+
+                float px = ux * w * 0.88f + driftX;
+                float py = baseY - riseY;
+                float twinkle = 0.55f + 0.45f * (float)Math.Sin(t * 22f + j * 2.3f);
+                float a = life * twinkle;
+
+                Color pCol = j % 3 == 0 ? starGold : (j % 3 == 1 ? starCyan : starViolet);
+                float r = Math.Max(0.8f, h * (0.010f + 0.013f * h3) * (1f - 0.45f * phase));
+
+                // Soft bloom halo
+                using (var halo = new SolidBrush(Color.FromArgb((int)(68 * a), pCol)))
+                    g.FillEllipse(halo, px - r * 2.4f, py - r * 2.4f, r * 4.8f, r * 4.8f);
+
+                if (j % 4 == 0)
+                {
+                    // Crisp 4-point star glint sparkle
+                    float arm = r * 2.8f;
+                    using (var sp = new Pen(Color.FromArgb((int)(235 * a), pCol), Math.Max(0.85f, r * 0.7f)))
+                    {
+                        g.DrawLine(sp, px - arm, py, px + arm, py);
+                        g.DrawLine(sp, px, py - arm, px, py + arm);
+                    }
+                    using (var core = new SolidBrush(Color.FromArgb((int)(245 * a), 255, 255, 255)))
+                        g.FillEllipse(core, px - r * 0.75f, py - r * 0.75f, r * 1.5f, r * 1.5f);
                 }
                 else
                 {
-                    d = v - burnProgress;
-                }
-
-                int fr = 0, fg = 0, fb = 0, fa = 0;
-
-                if (oa > 0 && d > -0.025f)
-                {
-                    if (d > 0.155f)
-                    {
-                        fr = ink.R; fg = ink.G; fb = ink.B; fa = (oa * ink.A) / 255;
-                    }
-                    else if (d > 0.085f)
-                    {
-                        float k = (0.155f - d) / 0.070f;
-                        fr = (int)(ink.R + (24 - ink.R) * k * 0.88f);
-                        fg = (int)(ink.G + (10 - ink.G) * k * 0.90f);
-                        fb = (int)(ink.B + (8 - ink.B) * k * 0.92f);
-                        fa = (oa * ink.A) / 255;
-                    }
-                    else if (d > 0.038f)
-                    {
-                        float k = (0.085f - d) / 0.047f;
-                        fr = (int)(24 + (225 - 24) * k);
-                        fg = (int)(10 + (46 - 10) * k);
-                        fb = (int)(8 + (10 - 8) * k);
-                        fa = oa;
-                    }
-                    else if (d > 0.002f)
-                    {
-                        float k = (0.038f - d) / 0.036f;
-                        fr = 255;
-                        fg = (int)(92 + (242 - 92) * k);
-                        fb = (int)(18 + (192 - 18) * k);
-                        fa = oa;
-                    }
-                    else
-                    {
-                        float k = (d + 0.025f) / 0.027f;
-                        fr = 255;
-                        fg = (int)(120 + 110 * k);
-                        fb = (int)(28 + 130 * k);
-                        fa = (int)(oa * Math.Max(0f, k));
-                    }
-                }
-
-                if (na > 0 && d < 0.015f)
-                {
-                    float reveal = Math.Max(0f, Math.Min(1f, (-d + 0.015f) / 0.095f));
-                    float rimHot = Math.Max(0f, 1f - (-d) / 0.085f) * energy;
-                    int nr = (int)(ink.R + (255 - ink.R) * Math.Min(1f, heatResidual + rimHot * 0.85f));
-                    int ng = (int)(ink.G + (162 - ink.G) * Math.Min(1f, heatResidual + rimHot * 0.65f));
-                    int nb = (int)(ink.B + (48 - ink.B) * Math.Min(1f, heatResidual + rimHot * 0.80f));
-                    int nAlpha = (int)((na * ink.A / 255f) * Math.Pow(reveal, 0.72));
-
-                    if (fa == 0)
-                    {
-                        fr = nr; fg = ng; fb = nb; fa = nAlpha;
-                    }
-                    else if (nAlpha > 0)
-                    {
-                        float sa = fa / 255f;
-                        float inv = 1f - sa;
-                        fr = (int)Math.Min(255f, fr * sa + nr * inv);
-                        fg = (int)Math.Min(255f, fg * sa + ng * inv);
-                        fb = (int)Math.Min(255f, fb * sa + nb * inv);
-                        fa = Math.Min(255, fa + (int)(nAlpha * inv));
-                    }
-                }
-
-                outBuf[idx] = (byte)Math.Max(0, Math.Min(255, fb));
-                outBuf[idx + 1] = (byte)Math.Max(0, Math.Min(255, fg));
-                outBuf[idx + 2] = (byte)Math.Max(0, Math.Min(255, fr));
-                outBuf[idx + 3] = (byte)Math.Max(0, Math.Min(255, fa));
-            }
-        }
-
-        BitmapData outData = emberOutBmp.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-        try { Marshal.Copy(outBuf, 0, outData.Scan0, outBuf.Length); }
-        finally { emberOutBmp.UnlockBits(outData); }
-
-        g.DrawImageUnscaled(emberOutBmp, (int)Math.Round(-cx), (int)Math.Round(-cy));
-
-        // 3. 38 turbulent rising glowing embers, velocity-stretched spark streaks, and charred ash flakes
-        float baseFrontY = h * (0.60f - 1.20f * (t * t * (3f - 2f * t)));
-        const int particleCount = 38;
-        for (int j = 0; j < particleCount; j++)
-        {
-            float h1 = EffectProcedural.Hash01(seed * 17 + j * 43);
-            float h2 = EffectProcedural.Hash01(seed * 31 + j * 61);
-            float h3 = EffectProcedural.Hash01(seed * 13 + j * 89);
-
-            float phase = (t * (1.25f + h2 * 1.15f) + h1 * 0.92f) % 1f;
-            float lifeAlpha = energy * (float)Math.Sin(phase * Math.PI);
-            if (lifeAlpha <= 0.04f) continue;
-
-            float startX = (h1 - 0.5f) * w * 0.86f;
-            float turb = (EffectProcedural.SampleFbm(j * 3.7f, phase * 8.0f + t * 4f) - 0.5f) * w * 0.24f;
-            float px = startX + turb + (float)Math.Sin(phase * 7.2f + j * 1.9f) * w * 0.045f;
-            float rise = h * (0.04f + (0.42f + 0.44f * h3) * phase * (0.75f + 0.45f * phase));
-            float py = baseFrontY + (h2 - 0.5f) * h * 0.10f - rise;
-
-            if (j % 6 == 0)
-            {
-                // Tumbling dark charred ash flake
-                float aw = Math.Max(1.1f, h * (0.015f + 0.012f * h2));
-                float ah = aw * (0.45f + 0.45f * (float)Math.Abs(Math.Cos(phase * 9f + j)));
-                GraphicsState ashState = g.Save();
-                g.TranslateTransform(px, py);
-                g.RotateTransform(phase * 220f + j * 45f);
-                using (var ash = new SolidBrush(Color.FromArgb((int)(155 * lifeAlpha), 34, 24, 22)))
-                    g.FillEllipse(ash, -aw, -ah, aw * 2f, ah * 2f);
-                g.Restore(ashState);
-            }
-            else
-            {
-                // Blackbody cooling spark: white-gold -> bright orange -> deep ember red
-                Color coreColor = phase < 0.30f
-                    ? MixInk(Color.FromArgb(255, 255, 250, 212), Color.FromArgb(255, 255, 162, 42), phase / 0.30f, lifeAlpha)
-                    : MixInk(Color.FromArgb(255, 255, 162, 42), Color.FromArgb(255, 215, 42, 12), (phase - 0.30f) / 0.70f, lifeAlpha);
-
-                float r = Math.Max(0.75f, h * (0.011f + 0.012f * h2) * (1f - 0.55f * phase));
-
-                // Soft luminous bloom halo
-                using (var halo = new SolidBrush(Color.FromArgb((int)(72 * lifeAlpha), 255, 108, 22)))
-                    g.FillEllipse(halo, px - r * 2.5f, py - r * 2.5f, r * 5.0f, r * 5.0f);
-
-                // Velocity-stretched glowing spark streak
-                float streakLen = r * (2.2f + 2.4f * h3);
-                using (var streak = new Pen(coreColor, r * 1.45f))
-                {
-                    streak.StartCap = streak.EndCap = LineCap.Round;
-                    g.DrawLine(streak, px, py, px - turb * 0.09f, py + streakLen);
+                    using (var core = new SolidBrush(Color.FromArgb((int)(230 * a), pCol)))
+                        g.FillEllipse(core, px - r, py - r, r * 2f, r * 2f);
                 }
             }
         }

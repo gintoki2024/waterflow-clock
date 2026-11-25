@@ -9,6 +9,9 @@
 @property(nonatomic) NSInteger flow;
 @property(nonatomic) NSInteger scale;
 @property(nonatomic, copy) NSString *fontName;
+@property(nonatomic) NSInteger customBgMode; // 0=default, 1=solid color, 2=image
+@property(nonatomic, strong) NSColor *customBgColor;
+@property(nonatomic, copy) NSString *customBgImagePath;
 @property(nonatomic, strong) ClockCountdown *countdown;
 @property(nonatomic, readonly) BOOL isAnimating;
 + (NSSize)sizeForScale:(NSInteger)scale;

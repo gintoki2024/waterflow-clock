@@ -93,7 +93,12 @@ static NSInteger NormalizeFlow(NSInteger raw) {
     [self item:@"返回时钟" key:@"clock" value:0 menu:_menu];
     [_menu addItem:NSMenuItem.separatorItem];
     [self choices:@"外观" key:@"theme" labels:@[@"液态磨砂",@"纯净悬浮",@"极简白瓷",@"深海幽蓝"]];
-    [self choices:@"数字特效" key:@"flow" labels:@[@"水波溪流",@"余烬燃烧",@"冰裂碎片",@"翻页记分牌"]];
+    [self choices:@"数字特效" key:@"flow" labels:@[@"水波溪流",@"星尘消散",@"冰裂碎片",@"翻页记分牌"]];
+    NSMenu *bgSub = [[NSMenu alloc] initWithTitle:@"自定义背景"];
+    [self item:@"选择背景图片…" key:@"bgImage" value:0 menu:bgSub];
+    [self item:@"选择背景颜色…" key:@"bgColor" value:0 menu:bgSub];
+    [self item:@"恢复默认背景" key:@"bgReset" value:0 menu:bgSub];
+    [_menu addItemWithTitle:@"自定义背景" action:nil keyEquivalent:@""].submenu = bgSub;
     [self choices:@"大小" key:@"scale" labels:@[@"小",@"标准",@"大"]];
     [self item:@"选择系统字体…" key:@"chooseFont" value:0 menu:_menu];
     [self item:@"内置手写字体" key:@"builtin" value:0 menu:_menu];
@@ -145,13 +150,20 @@ static NSInteger NormalizeFlow(NSInteger raw) {
     if (flow != [_prefs integerForKey:@"flow"]) [_prefs setInteger:flow forKey:@"flow"];
     _view.flow = flow; _view.scale = [_prefs integerForKey:@"scale"];
     _view.theme = [_prefs integerForKey:@"theme"]; _view.autoColor = [_prefs boolForKey:@"auto"];
+    _view.customBgMode = [_prefs integerForKey:@"customBgMode"];
+    _view.customBgImagePath = [_prefs stringForKey:@"customBgImage"];
+    NSArray *rgba = [_prefs arrayForKey:@"customBgColor"];
+    if (rgba.count == 4) {
+        _view.customBgColor = [NSColor colorWithSRGBRed:[rgba[0] doubleValue] green:[rgba[1] doubleValue]
+                                                   blue:[rgba[2] doubleValue] alpha:[rgba[3] doubleValue]];
+    }
     _lastRenderedSecond = -1;
     NSSize wanted = [self preferredSize];
     NSRect frame = _window.frame;
     if (!NSEqualSizes(frame.size,wanted))
         [_window setFrame:NSMakeRect(NSMinX(frame),NSMaxY(frame)-wanted.height,wanted.width,wanted.height) display:YES];
     _window.level = [_prefs boolForKey:@"top"] ? NSFloatingWindowLevel : NSNormalWindowLevel;
-    _glass.hidden = _view.theme == 1; _window.hasShadow = !_glass.hidden;
+    _glass.hidden = (_view.theme == 1 && _view.customBgMode == 0); _window.hasShadow = !_glass.hidden;
     _glass.material = _view.theme == 3 ? NSVisualEffectMaterialHUDWindow : NSVisualEffectMaterialPopover;
     _glass.appearance = [NSAppearance appearanceNamed:_view.theme==2 ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
     [_sampler updateView:_view]; [_view setNeedsDisplay:YES];
@@ -168,18 +180,22 @@ static NSInteger NormalizeFlow(NSInteger raw) {
     dialog.messageText=@"设置倒计时";
     dialog.informativeText=@"填写名称，选择倒计时方式。";
     [dialog addButtonWithTitle:@"开始"]; [dialog addButtonWithTitle:@"取消"];
-    NSView *form=[[NSView alloc] initWithFrame:NSMakeRect(0,0,342,138)];
-    NSTextField *name=[[NSTextField alloc] initWithFrame:NSMakeRect(0,110,342,24)];
+    NSView *form=[[NSView alloc] initWithFrame:NSMakeRect(0,0,342,168)];
+    NSTextField *name=[[NSTextField alloc] initWithFrame:NSMakeRect(0,140,342,24)];
     name.placeholderString=@"倒计时名称"; name.stringValue=_countdown.name ?: @"";
     [name setAccessibilityLabel:@"倒计时名称"]; [form addSubview:name];
-    CountdownModeControl *mode=[[CountdownModeControl alloc] initWithFrame:NSMakeRect(0,70,342,28)];
-    mode.segmentCount=2; [mode setLabel:@"指定时长" forSegment:0]; [mode setLabel:@"到指定时间" forSegment:1];
+    CountdownModeControl *mode=[[CountdownModeControl alloc] initWithFrame:NSMakeRect(0,100,342,28)];
+    mode.segmentCount=2; [mode setLabel:@"指定时长" forSegment:0]; [mode setLabel:@"到指定日期时间（10年内）" forSegment:1];
     mode.target=mode; mode.action=@selector(showSelectedFields:); mode.selectedSegment=_countdown.usesTargetTime?1:0;
     [form addSubview:mode]; name.nextKeyView=mode;
-    NSView *durationFields=[[NSView alloc] initWithFrame:NSMakeRect(0,0,342,60)];
+    NSView *durationFields=[[NSView alloc] initWithFrame:NSMakeRect(0,30,342,60)];
     NSView *targetFields=[[NSView alloc] initWithFrame:durationFields.frame];
     [form addSubview:durationFields]; [form addSubview:targetFields];
     mode.durationFields=durationFields; mode.targetFields=targetFields;
+    NSButton *secondsCheck = [NSButton checkboxWithTitle:@"仅显示总秒数（纯秒倒计时）" target:nil action:nil];
+    secondsCheck.frame = NSMakeRect(0, 2, 342, 22);
+    secondsCheck.state = _countdown.showSecondsOnly ? NSControlStateValueOn : NSControlStateValueOff;
+    [form addSubview:secondsCheck];
     NSInteger duration=_countdown && !_countdown.usesTargetTime ? _countdown.duration :
         [_prefs integerForKey:@"lastCountdownDuration"];
     if (duration<1 || duration>359999) duration=300;
@@ -201,6 +217,8 @@ static NSInteger NormalizeFlow(NSInteger raw) {
     target.datePickerStyle=NSTextFieldAndStepperDatePickerStyle;
     target.datePickerElements=NSYearMonthDayDatePickerElementFlag | NSHourMinuteSecondDatePickerElementFlag;
     target.timeZone=NSTimeZone.localTimeZone;
+    target.minDate=NSDate.date;
+    target.maxDate=[NSDate dateWithTimeIntervalSinceNow:[ClockCountdown maxTargetInterval]];
     NSTimeInterval defaultDate=_countdown.usesTargetTime ? _countdown.deadline : ceil(NSDate.date.timeIntervalSince1970)+300;
     target.dateValue=[NSDate dateWithTimeIntervalSince1970:defaultDate];
     [target setAccessibilityLabel:@"本地目标日期、小时、分钟和秒"]; [targetFields addSubview:target];
@@ -212,10 +230,12 @@ static NSInteger NormalizeFlow(NSInteger raw) {
     while ([dialog runModal]==NSAlertFirstButtonReturn) {
         NSTimeInterval now=NSDate.date.timeIntervalSince1970;
         BOOL useTarget=mode.selectedSegment==1;
+        BOOL secOnly=secondsCheck.state==NSControlStateValueOn;
         ClockCountdown *entry=useTarget
-            ? [ClockCountdown countdownNamed:name.stringValue endingAt:floor(target.dateValue.timeIntervalSince1970) startingAt:now]
+            ? [ClockCountdown countdownNamed:name.stringValue endingAt:floor(target.dateValue.timeIntervalSince1970)
+                                  startingAt:now showSecondsOnly:secOnly]
             : [ClockCountdown countdownNamed:name.stringValue hours:fields[0].stringValue
-                minutes:fields[1].stringValue seconds:fields[2].stringValue startingAt:now];
+                minutes:fields[1].stringValue seconds:fields[2].stringValue startingAt:now showSecondsOnly:secOnly];
         if (entry) {
             if (!_countdown.usesTargetTime && _countdown) [_prefs setInteger:_countdown.duration forKey:@"lastCountdownDuration"];
             if (!entry.usesTargetTime) [_prefs setInteger:entry.duration forKey:@"lastCountdownDuration"];
@@ -224,7 +244,7 @@ static NSInteger NormalizeFlow(NSInteger raw) {
             _countdown=entry; _view.countdown=entry;
             break;
         }
-        dialog.informativeText=useTarget ? @"请填写名称，并选择晚于当前时间的日期和时间。" :
+        dialog.informativeText=useTarget ? @"请填写名称，并选择未来 10 年内晚于当前时间的日期和时间。" :
             @"请填写名称。小时为 0–99，分钟和秒为 0–59，总时长须大于零。";
     }
 }
@@ -255,6 +275,30 @@ static NSInteger NormalizeFlow(NSInteger raw) {
         _view.countdown=showClock ? nil : _countdown; return;
     }
     if ([key isEqual:@"reset"]) { [self resetPosition]; return; }
+    if ([key isEqual:@"bgImage"]) {
+        NSOpenPanel *panel = [NSOpenPanel openPanel];
+        panel.canChooseFiles = YES; panel.canChooseDirectories = NO;
+        [NSApp activateIgnoringOtherApps:YES];
+        if ([panel runModal] == NSModalResponseOK && panel.URL.path.length) {
+            [_prefs setInteger:2 forKey:@"customBgMode"];
+            [_prefs setObject:panel.URL.path forKey:@"customBgImage"];
+            [self applySettings];
+        }
+        return;
+    }
+    if ([key isEqual:@"bgColor"]) {
+        NSColorPanel *cp = NSColorPanel.sharedColorPanel;
+        cp.target = self; cp.action = @selector(changeBgColor:);
+        [NSApp activateIgnoringOtherApps:YES];
+        [cp orderFront:self];
+        return;
+    }
+    if ([key isEqual:@"bgReset"]) {
+        [_prefs setInteger:0 forKey:@"customBgMode"];
+        [_prefs removeObjectForKey:@"customBgImage"];
+        [self applySettings];
+        return;
+    }
     if ([key isEqual:@"capture"]) { [_sampler requestAccess]; return; }
     if ([key isEqual:@"chooseFont"]) {
         NSFontManager *manager = NSFontManager.sharedFontManager; manager.target = self;
@@ -276,6 +320,13 @@ static NSInteger NormalizeFlow(NSInteger raw) {
     }
     else if ([@[@"theme",@"flow"] containsObject:key]) [_prefs setInteger:sender.tag forKey:key];
     else [_prefs setBool:![_prefs boolForKey:key] forKey:key];
+    [self applySettings];
+}
+- (void)changeBgColor:(NSColorPanel *)sender {
+    NSColor *c = [sender.color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    if (!c) return;
+    [_prefs setInteger:1 forKey:@"customBgMode"];
+    [_prefs setObject:@[@(c.redComponent), @(c.greenComponent), @(c.blueComponent), @(c.alphaComponent)] forKey:@"customBgColor"];
     [self applySettings];
 }
 - (void)changeFont:(NSFontManager *)sender {

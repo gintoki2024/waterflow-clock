@@ -353,17 +353,17 @@ internal static class HandwrittenDigits
             {
                 float nx = -dy / len;
                 float ny = dx / len;
+                // Clockwise in Y-down screen coordinates (matching GDI+ AddEllipse winding!)
                 PointF[] quad =
                 {
-                    new PointF(a.X + nx * ra, a.Y + ny * ra),
-                    new PointF(b.X + nx * rb, b.Y + ny * rb),
+                    new PointF(a.X - nx * ra, a.Y - ny * ra),
                     new PointF(b.X - nx * rb, b.Y - ny * rb),
-                    new PointF(a.X - nx * ra, a.Y - ny * ra)
+                    new PointF(b.X + nx * rb, b.Y + ny * rb),
+                    new PointF(a.X + nx * ra, a.Y + ny * ra)
                 };
                 target.AddPolygon(quad);
             }
-            if ((i & 1) == 1 || i == n - 2)
-                AddDisc(target, b, rb);
+            AddDisc(target, b, rb);
         }
     }
 

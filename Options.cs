@@ -24,9 +24,16 @@ public enum ClockScale
 public enum ClockFlowStyle
 {
     LiquidStream = 0,
-    EmberBurn = 1,
+    Stardust = 1,
     IceShards = 2,
     SplitFlap = 3
+}
+
+public enum CustomBackgroundMode
+{
+    Default = 0,
+    SolidColor = 1,
+    Image = 2
 }
 
 public class Options
@@ -43,6 +50,9 @@ public class Options
     public int Zoom = 10000;
     public static int ClampZoom(int value) { return Math.Max(5000, Math.Min(25000, value)); }
     public ClockFlowStyle FlowStyle = ClockFlowStyle.LiquidStream;
+    public CustomBackgroundMode CustomBgMode = CustomBackgroundMode.Default;
+    public int CustomBgColor = Color.FromArgb(228, 22, 28, 42).ToArgb();
+    public string CustomBgImage = "";
     public int X = int.MinValue;
     public int Y = int.MinValue;
 
@@ -67,10 +77,14 @@ public class Options
                 if (scale >= 0 && scale <= 2) options.Scale = (ClockScale)scale;
                 options.Zoom = ClampZoom(ReadNumber(key, "Zoom", 10000));
                 int flow = ReadNumber(key, "FlowStyle", (int)ClockFlowStyle.LiquidStream);
-                if (flow == 4) options.FlowStyle = ClockFlowStyle.EmberBurn;
+                if (flow == 4) options.FlowStyle = ClockFlowStyle.Stardust;
                 else if (flow == 5) options.FlowStyle = ClockFlowStyle.IceShards;
                 else if (flow == 6) options.FlowStyle = ClockFlowStyle.SplitFlap;
                 else if (Enum.IsDefined(typeof(ClockFlowStyle), flow)) options.FlowStyle = (ClockFlowStyle)flow;
+                int bgMode = ReadNumber(key, "CustomBgMode", 0);
+                if (Enum.IsDefined(typeof(CustomBackgroundMode), bgMode)) options.CustomBgMode = (CustomBackgroundMode)bgMode;
+                options.CustomBgColor = ReadNumber(key, "CustomBgColor", options.CustomBgColor);
+                options.CustomBgImage = key.GetValue("CustomBgImage") as string ?? "";
                 options.X = ReadNumber(key, "X", int.MinValue);
                 options.Y = ReadNumber(key, "Y", int.MinValue);
             }
@@ -107,6 +121,9 @@ public class Options
             key.SetValue("Scale", (int)Scale, RegistryValueKind.DWord);
             key.SetValue("Zoom", ClampZoom(Zoom), RegistryValueKind.DWord);
             key.SetValue("FlowStyle", (int)FlowStyle, RegistryValueKind.DWord);
+            key.SetValue("CustomBgMode", (int)CustomBgMode, RegistryValueKind.DWord);
+            key.SetValue("CustomBgColor", CustomBgColor, RegistryValueKind.DWord);
+            key.SetValue("CustomBgImage", CustomBgImage ?? "", RegistryValueKind.String);
             key.SetValue("X", X, RegistryValueKind.DWord);
             key.SetValue("Y", Y, RegistryValueKind.DWord);
         }
@@ -129,7 +146,7 @@ public class Options
         switch (style)
         {
             case ClockFlowStyle.LiquidStream: return "水波溪流（水下焦散 + 2D折射色散）";
-            case ClockFlowStyle.EmberBurn: return "余烬燃烧（噪声侵蚀 + 黑体火焰 + 炭火底纹）";
+            case ClockFlowStyle.Stardust: return "星尘消散（极光星云 + 流星微尘）";
             case ClockFlowStyle.IceShards: return "冰裂碎片（3D晶体翻滚 + 霜花底板）";
             case ClockFlowStyle.SplitFlap: return "翻页记分牌（3D透视翻折 + 机械铝箱）";
             default: return "水波溪流（水下焦散 + 2D折射色散）";
@@ -371,7 +388,10 @@ public sealed class OptionsDialog : Form
             Theme = (ClockTheme)Math.Max(0, themeBox.SelectedIndex),
             Scale = scaleBox.SelectedIndex == 3 ? options.Scale : (ClockScale)Math.Max(0, scaleBox.SelectedIndex),
             Zoom = scaleBox.SelectedIndex == 3 ? options.Zoom : 10000,
-            FlowStyle = (ClockFlowStyle)Math.Max(0, flowBox.SelectedIndex)
+            FlowStyle = (ClockFlowStyle)Math.Max(0, flowBox.SelectedIndex),
+            CustomBgMode = options.CustomBgMode,
+            CustomBgColor = options.CustomBgColor,
+            CustomBgImage = options.CustomBgImage
         };
         try
         {

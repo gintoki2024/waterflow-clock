@@ -21,7 +21,7 @@ jobs:
           $sources = (Get-ChildItem -LiteralPath . -Filter '*.cs' -File).FullName
           New-Item -ItemType Directory -Path dist | Out-Null
           $app = Join-Path $PWD 'dist/水流时钟.exe'
-          & $csc @flags /target:winexe "/out:$app" @sources
+          & $csc @flags /target:winexe /win32icon:AppIcon.ico "/out:$app" @sources
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $checks = Join-Path $env:RUNNER_TEMP 'ClockSmoke.exe'
           $testSource = (Get-Item -LiteralPath 'tests/windows/ClockSmoke.cs').FullName
